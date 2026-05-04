@@ -20,27 +20,36 @@ export function SettingsPage({
   state, onSetPin, onImport, onClearAll,
   onSetGoogleClientId, onSetGoogleAccessToken, onSetLastBackupTime, showToast,
 }: Props) {
+  const envGoogleClientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || '';
+  const effectiveGoogleClientId = state.googleClientId || envGoogleClientId;
   const [pin, setPin] = useState('');
-  const [clientIdInput, setClientIdInput] = useState(state.googleClientId || '');
+  const [clientIdInput, setClientIdInput] = useState(state.googleClientId || envGoogleClientId || '');
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [showPasteRestore, setShowPasteRestore] = useState(false);
+  const [pasteValue, setPasteValue] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const isGoogleSignedIn = !!state.googleAccessToken;
 
   const handleGoogleSignIn = async () => {
-    if (!state.googleClientId) {
+    if (!effectiveGoogleClientId) {
       showToast('প্রথমে Google Client ID দিন');
       return;
     }
     setGoogleLoading(true);
     try {
-      const token = await signInWithGoogle(state.googleClientId);
+      const token = await signInWithGoogle(effectiveGoogleClientId);
       onSetGoogleAccessToken(token);
       setAccessToken(token);
       showToast('Google সাইন-ইন সফল! ☁️');
     } catch (err: any) {
-      showToast(`সাইন-ইন ব্যর্থ: ${err.message || 'অনুগ্রহ করে আবার চেষ্টা করুন'}`);
+      const msg = String(err?.message || err || '');
+      if (msg.includes('access_denied') || msg.includes('403')) {
+        showToast('Google access blocked: OAuth verification/test user দরকার');
+      } else {
+        showToast(`সাইন-ইন ব্যর্থ: ${msg || 'অনুগ্রহ করে আবার চেষ্টা করুন'}`);
+      }
     } finally {
       setGoogleLoading(false);
     }
@@ -111,6 +120,39 @@ export function SettingsPage({
     showToast('ব্যাকআপ ফাইল ডাউনলোড সম্পন্ন');
   };
 
+  const handleCopyBackup = async () => {
+    const data = JSON.stringify(state);
+    try {
+      await navigator.clipboard.writeText(data);
+      showToast('ব্যাকআপ কপি হয়েছে');
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = data;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      showToast('ব্যাকআপ কপি হয়েছে');
+    }
+  };
+
+  const handlePasteRestore = () => {
+    try {
+      const parsed = JSON.parse(pasteValue);
+      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid backup');
+      if (window.confirm('বর্তমান ডেটা মুছে এই backup restore করতে চান?')) {
+        onImport(parsed);
+        setPasteValue('');
+        setShowPasteRestore(false);
+        showToast('Backup restore হয়েছে');
+      }
+    } catch {
+      showToast('Backup text সঠিক নয়');
+    }
+  };
+
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -137,11 +179,50 @@ export function SettingsPage({
         <p className="text-sm text-gray-400">আপনার অ্যাপ কনফিগার করুন</p>
       </div>
 
+      {/* === Backup First === */}
+      <div className="card border border-emerald-500/20" style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.08), rgba(99,102,241,0.06))' }}>
+        <div className="card-title">
+          <i className="fas fa-shield-heart text-emerald-400" />
+          নিরাপদ ব্যাকআপ
+        </div>
+        <p className="text-xs text-gray-400 mb-3">
+          Google verification সমস্যা থাকলেও এই ৩টি পদ্ধতিতে আপনার ডেটা সেভ/রিস্টোর করা যাবে।
+        </p>
+        <div className="space-y-3">
+          <button onClick={handleExportFile} className="btn btn-primary">
+            <i className="fas fa-download" /> Backup ফাইল ডাউনলোড
+          </button>
+          <button onClick={handleCopyBackup} className="btn btn-secondary">
+            <i className="fas fa-copy" /> Backup text কপি
+          </button>
+          <button onClick={() => setShowPasteRestore(!showPasteRestore)} className="btn btn-secondary">
+            <i className="fas fa-paste" /> Backup text থেকে Restore
+          </button>
+          {showPasteRestore && (
+            <div className="space-y-2">
+              <textarea
+                className="input-field min-h-32 text-xs"
+                placeholder="এখানে backup text paste করুন..."
+                value={pasteValue}
+                onChange={(e) => setPasteValue(e.target.value)}
+              />
+              <button onClick={handlePasteRestore} className="btn btn-primary text-sm">
+                <i className="fas fa-check" /> Restore করুন
+              </button>
+            </div>
+          )}
+          <button onClick={() => fileInput.current?.click()} className="btn btn-secondary">
+            <i className="fas fa-upload" /> Backup ফাইল থেকে Restore
+          </button>
+          <input ref={fileInput} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
+        </div>
+      </div>
+
       {/* === Google Drive Backup === */}
       <div className="card">
         <div className="card-title">
           <i className="fab fa-google" style={{ color: '#4285F4' }} />
-          Google Drive ব্যাকআপ
+          Google Drive ব্যাকআপ (ঐচ্ছিক)
           {isGoogleSignedIn && (
             <span className="ml-auto text-xs text-emerald-400 font-normal">
               <i className="fas fa-circle text-[8px] mr-1" /> সংযুক্ত
@@ -149,8 +230,16 @@ export function SettingsPage({
           )}
         </div>
 
+        <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-100 space-y-1">
+          <p className="font-semibold text-amber-300">
+            <i className="fas fa-triangle-exclamation mr-1" /> Google access blocked হলে কারণ
+          </p>
+          <p>Google বলছে এই OAuth app verified নয়। তাই developer-approved tester না হলে access বন্ধ থাকবে।</p>
+          <p className="text-amber-200/80">সমাধান: OAuth consent screen এ আপনার Gmail test user হিসেবে add করতে হবে, অথবা app production verification complete করতে হবে।</p>
+        </div>
+
         {/* Client ID input */}
-        {!state.googleClientId && (
+        {!effectiveGoogleClientId && (
           <div className="mb-4">
             <label className="block text-xs text-gray-400 mb-1">Google OAuth Client ID</label>
             <input
@@ -202,6 +291,8 @@ export function SettingsPage({
                 <br />
                 <code className="text-amber-300">({window.location.origin})</code>
               </li>
+              <li><strong>OAuth consent screen → Test users</strong> এ আপনার Gmail যোগ করুন</li>
+              <li>Publishing status যদি Testing হয়, শুধু test users login করতে পারবে</li>
               <li>Client ID কপি করে উপরে পেস্ট করুন</li>
             </ol>
             <button
@@ -214,8 +305,13 @@ export function SettingsPage({
         )}
 
         {/* Signed in state */}
-        {state.googleClientId && !isGoogleSignedIn && (
+        {effectiveGoogleClientId && !isGoogleSignedIn && (
           <div className="space-y-3">
+            {envGoogleClientId && !state.googleClientId && (
+              <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl">
+                <i className="fas fa-cloud mr-1" /> Cloudflare environment থেকে Google Client ID loaded.
+              </div>
+            )}
             <button
               onClick={handleGoogleSignIn}
               disabled={googleLoading}
@@ -270,26 +366,6 @@ export function SettingsPage({
             </button>
           </div>
         )}
-      </div>
-
-      {/* === File Backup === */}
-      <div className="card">
-        <div className="card-title">
-          <i className="fas fa-file-export" style={{ color: 'var(--primary)' }} />
-          ফাইল ব্যাকআপ
-        </div>
-        <div className="space-y-3">
-          <button onClick={handleExportFile} className="btn btn-primary">
-            <i className="fas fa-download" /> JSON ফাইলে ডাউনলোড
-          </button>
-          <button onClick={() => fileInput.current?.click()} className="btn btn-secondary">
-            <i className="fas fa-upload" /> JSON ফাইল থেকে পুনরুদ্ধার
-          </button>
-          <input ref={fileInput} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
-          <p className="text-xs text-center text-gray-500">
-            আপনার ফোনে বা ক্লাউডে সেভ করুন
-          </p>
-        </div>
       </div>
 
       {/* === PIN === */}
