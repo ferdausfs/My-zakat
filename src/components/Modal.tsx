@@ -11,18 +11,19 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
   if (!open) return null;
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">{title}</h2>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-white/5 sticky top-0 bg-[#141b2d] z-10">
+          <h2 className="text-base font-bold">{title}</h2>
           <button
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-gray-700 text-gray-300"
-            aria-label="Close"
+            className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition"
           >
-            <i className="fas fa-times" />
+            <i className="fas fa-times text-sm" />
           </button>
         </div>
-        {children}
+        <div className="p-4">
+          {children}
+        </div>
       </div>
     </div>
   );

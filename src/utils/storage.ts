@@ -22,8 +22,8 @@ export interface TasbihDayStats {
 }
 
 export interface AppState {
-  assets: Asset[];                    // EACH with createdAt (ISO date)
-  liabilities: Liability[];           // EACH with createdAt (ISO date)
+  assets: Asset[];
+  liabilities: Liability[];
   prices: Prices;
   nisabStandard: NisabStandard;
   salatLog: Record<string, Record<string, SalatLogEntry>>;
@@ -33,6 +33,8 @@ export interface AppState {
   googleClientId: string | null;
   tasbihStats: Record<string, TasbihDayStats>;
   lastBackupTime: string | null;
+  theme?: 'dark' | 'light';
+  currency?: string;
 }
 
 export const DEFAULT_STATE: AppState = {
@@ -41,12 +43,19 @@ export const DEFAULT_STATE: AppState = {
   prices: { goldPerGram: 13500, silverPerGram: 165 },
   nisabStandard: 'silver',
   salatLog: {},
-  location: { name: 'ঢাকা, বাংলাদেশ', coords: [23.8103, 90.4125], timezone: 6 },
+  location: {
+    name: 'ঢাকা, বাংলাদেশ',
+    coords: [23.8103, 90.4125],
+    timezone: 6,
+    method: 'karachi',
+  },
   pin: null,
   googleAccessToken: null,
   googleClientId: null,
   tasbihStats: {},
   lastBackupTime: null,
+  theme: 'dark',
+  currency: 'BDT',
 };
 
 export function loadState(): AppState {
@@ -61,6 +70,7 @@ export function loadState(): AppState {
     if (!raw) return DEFAULT_STATE;
     const parsed = JSON.parse(raw);
     const now = new Date().toISOString();
+
     const assets = (parsed.assets || []).map((asset: Partial<Asset>) => ({
       ...asset,
       id: asset.id || crypto.randomUUID?.() || String(Date.now() + Math.random()),
@@ -69,6 +79,7 @@ export function loadState(): AppState {
       value: Number(asset.value || 0),
       createdAt: asset.createdAt || now,
     })) as Asset[];
+
     const liabilities = (parsed.liabilities || []).map((liability: Partial<Liability>) => ({
       ...liability,
       id: liability.id || crypto.randomUUID?.() || String(Date.now() + Math.random()),
@@ -77,6 +88,7 @@ export function loadState(): AppState {
       amount: Number(liability.amount || 0),
       createdAt: liability.createdAt || now,
     })) as Liability[];
+
     return {
       ...DEFAULT_STATE,
       ...parsed,

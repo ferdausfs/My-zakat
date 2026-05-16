@@ -29,7 +29,6 @@ body {
   min-height: 100dvh;
 }
 
-/* Subtle animated background */
 body::before {
   content: '';
   position: fixed;
@@ -193,7 +192,7 @@ body::before {
 .modal-content {
   width: 100%;
   max-width: 480px;
-  max-height: 88dvh;
+  max-height: 90dvh;
   background: #141b2d;
   border: 1px solid var(--card-border);
   border-radius: 1.25rem 1.25rem 0 0;
@@ -228,6 +227,13 @@ body::before {
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
 
+/* ─── Pulse ─── */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--primary-glow); }
+  50% { box-shadow: 0 0 0 12px transparent; }
+}
+.pulse-glow { animation: pulse-glow 2s infinite; }
+
 /* ─── Scrollbar ─── */
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -256,6 +262,7 @@ input[type="checkbox"] { accent-color: var(--primary); width: 1.15rem; height: 1
 
 /* ─── Line clamp ─── */
 .line-clamp-1 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+.line-clamp-2 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /* ─── Arabic ─── */
 .font-arabic { font-family: 'Noto Naskh Arabic', serif; line-height: 2.2; }
@@ -264,8 +271,33 @@ input[type="checkbox"] { accent-color: var(--primary); width: 1.15rem; height: 1
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
 /* ─── Page transition ─── */
-.app-container > div { animation: pageIn 0.2s ease; }
-@keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.page-enter { animation: pageIn 0.25s ease; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ─── Focus ─── */
 input:focus-visible, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ─── Badge ─── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+/* ─── Gradient text ─── */
+.gradient-text {
+  background: linear-gradient(135deg, var(--primary), #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Ramadan special ─── */
+@keyframes starTwinkle {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+.star-twinkle { animation: starTwinkle 2s ease-in-out infinite; }

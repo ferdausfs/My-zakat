@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DHIKR_PRESETS, getTodayKey, type DhikrPreset } from '../utils/tasbih';
+import { DHIKR_PRESETS, getTodayKey, type DhikrPreset } from '../data/dhikr';
 import type { TasbihDayStats } from '../utils/storage';
 
 interface Props {
@@ -16,16 +16,14 @@ export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
   const [showPresets, setShowPresets] = useState(false);
   const [vibrate, setVibrate] = useState(true);
   const [showStats, setShowStats] = useState(false);
-  const tapRef = useRef<HTMLDivElement>(null);
+  const tapRef = useRef<HTMLButtonElement>(null);
   const todayKey = getTodayKey();
   const todayStats = stats[todayKey] || {};
 
-  // Load today's count for active dhikr
   useEffect(() => {
     setCount(todayStats[activeDhikr.id] || 0);
-  }, [activeDhikr.id, todayStats]);
+  }, [activeDhikr.id]);
 
-  // Calculate total today
   useEffect(() => {
     const total = Object.values(todayStats).reduce((s, c) => s + c, 0);
     setTotalToday(total);
@@ -35,13 +33,7 @@ export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
     const newCount = count + 1;
     setCount(newCount);
     onUpdateCount(todayKey, activeDhikr.id, newCount);
-
-    // Haptic feedback
-    if (vibrate && navigator.vibrate) {
-      navigator.vibrate(15);
-    }
-
-    // Check target
+    if (vibrate && navigator.vibrate) navigator.vibrate(15);
     if (activeDhikr.target > 0 && newCount === activeDhikr.target) {
       if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 100]);
       showToast(`${activeDhikr.transliteration} ${activeDhikr.target.toLocaleString('bn-BD')} সম্পন্ন! 🎉`);
@@ -70,56 +62,78 @@ export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
     ? customText.trim()
     : activeDhikr.transliteration;
 
+  const completedSets = activeDhikr.target > 0 ? Math.floor(count / activeDhikr.target) : 0;
+
   return (
-    <div className="px-4 pt-6 pb-4">
-      <div className="text-center mb-4">
-        <h1 className="text-2xl font-bold">তাসবীহ</h1>
-        <p className="text-sm text-gray-400">যিকির কাউন্টার</p>
+    <div className="px-4 pt-5 space-y-4 page-enter">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold gradient-text">তাসবীহ</h1>
+          <p className="text-xs text-gray-400 mt-0.5">যিকির কাউন্টার</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setVibrate(!vibrate)}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm transition ${vibrate ? 'bg-indigo-500/20 text-indigo-400' : 'bg-white/5 text-gray-500'}`}
+            title="ভাইব্রেশন"
+          >
+            <i className={`fas fa-mobile-alt`} />
+          </button>
+          <button
+            onClick={() => setShowStats(!showStats)}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm transition ${showStats ? 'bg-indigo-500/20 text-indigo-400' : 'bg-white/5 text-gray-500'}`}
+          >
+            <i className="fas fa-chart-bar" />
+          </button>
+        </div>
       </div>
 
       {/* Stats summary */}
-      <div className="grid grid-cols-3 gap-2 mb-4">
-        <button
-          onClick={() => setShowStats(!showStats)}
-          className="card mb-0 p-2 text-center"
-        >
-          <p className="text-xs text-gray-400">আজকের মোট</p>
-          <p className="text-lg font-bold" style={{ color: 'var(--primary)' }}>
-            {totalToday.toLocaleString('bn-BD')}
-          </p>
-        </button>
-        <div className="card mb-0 p-2 text-center">
-          <p className="text-xs text-gray-400">এই যিকির</p>
-          <p className="text-lg font-bold text-emerald-400">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="card text-center" style={{ padding: '10px' }}>
+          <p className="text-[10px] text-gray-400">এই যিকির</p>
+          <p className="text-xl font-extrabold tabular-nums" style={{ color: activeDhikr.color }}>
             {count.toLocaleString('bn-BD')}
           </p>
         </div>
-        <div className="card mb-0 p-2 text-center">
-          <p className="text-xs text-gray-400">লক্ষ্য</p>
-          <p className="text-lg font-bold text-amber-400">
+        <div className="card text-center" style={{ padding: '10px' }}>
+          <p className="text-[10px] text-gray-400">লক্ষ্য</p>
+          <p className="text-xl font-extrabold tabular-nums text-gray-300">
             {activeDhikr.target > 0 ? activeDhikr.target.toLocaleString('bn-BD') : '∞'}
+          </p>
+        </div>
+        <div className="card text-center" style={{ padding: '10px' }}>
+          <p className="text-[10px] text-gray-400">আজ মোট</p>
+          <p className="text-xl font-extrabold tabular-nums text-emerald-400">
+            {totalToday.toLocaleString('bn-BD')}
           </p>
         </div>
       </div>
 
-      {/* Today's stats detail */}
+      {/* Today's stats */}
       {showStats && (
-        <div className="card mb-4 max-h-48 overflow-y-auto">
-          <h3 className="text-sm font-semibold mb-2 text-gray-300">আজকের যিকির তালিকা</h3>
+        <div className="card">
+          <p className="text-xs font-semibold text-gray-400 mb-3">আজকের যিকির তালিকা</p>
           {Object.entries(todayStats).filter(([_, c]) => c > 0).length === 0 ? (
-            <p className="text-xs text-gray-500 text-center py-3">আজ এখনো কোনো যিকির হয়নি</p>
+            <p className="text-center text-gray-500 text-sm py-2">আজ এখনো কোনো যিকির হয়নি</p>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-2">
               {Object.entries(todayStats)
                 .filter(([_, c]) => c > 0)
+                .sort(([, a], [, b]) => b - a)
                 .map(([id, c]) => {
                   const preset = DHIKR_PRESETS.find(p => p.id === id);
+                  const pct = preset?.target ? Math.min(100, (c / preset.target) * 100) : 0;
                   return (
-                    <div key={id} className="flex justify-between text-sm py-1">
-                      <span className="text-gray-300 truncate flex-1">
-                        {preset?.transliteration || id}
+                    <div key={id} className="flex items-center gap-2">
+                      <span className="text-xs text-gray-300 flex-1">{preset?.transliteration || id}</span>
+                      <div className="w-20 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: preset?.color || 'var(--primary)' }} />
+                      </div>
+                      <span className="text-xs font-bold tabular-nums" style={{ color: preset?.color || 'var(--primary)' }}>
+                        {c.toLocaleString('bn-BD')}
                       </span>
-                      <span className="font-semibold ml-2">{c.toLocaleString('bn-BD')}</span>
                     </div>
                   );
                 })}
@@ -131,157 +145,122 @@ export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
       {/* Dhikr selector */}
       <button
         onClick={() => setShowPresets(!showPresets)}
-        className="w-full card mb-4 text-center"
-        style={{ padding: '12px' }}
+        className="w-full flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/3 hover:bg-white/6 transition text-sm"
       >
-        <div className="flex items-center justify-center gap-3">
-          <span className="text-2xl">{activeDhikr.arabic ? '' : '📿'}</span>
-          <div>
-            {activeDhikr.arabic && (
-              <p className="text-2xl leading-tight font-arabic">{activeDhikr.arabic}</p>
-            )}
-            <p className="text-sm font-semibold">{displayName}</p>
-            <p className="text-xs text-gray-400">{activeDhikr.meaning.substring(0, 50)}...</p>
-          </div>
-          <i className={`fas fa-chevron-${showPresets ? 'up' : 'down'} text-gray-400`} />
+        <div className="flex items-center gap-2">
+          <div className="w-2.5 h-2.5 rounded-full" style={{ background: activeDhikr.color }} />
+          <span className="font-medium">{activeDhikr.transliteration}</span>
         </div>
+        <i className={`fas fa-chevron-${showPresets ? 'up' : 'down'} text-gray-400 text-xs`} />
       </button>
-
-      {/* Custom text input */}
-      {activeDhikr.id === 'custom' && (
-        <div className="mb-4">
-          <input
-            type="text"
-            className="input-field text-center"
-            placeholder="আপনার নিজস্ব যিকির লিখুন..."
-            value={customText}
-            onChange={(e) => setCustomText(e.target.value)}
-          />
-        </div>
-      )}
 
       {/* Preset selector */}
       {showPresets && (
-        <div className="card mb-4 max-h-64 overflow-y-auto" style={{ padding: '8px' }}>
-          <div className="space-y-1">
+        <div className="card" style={{ padding: '8px' }}>
+          <div className="grid grid-cols-2 gap-1.5">
             {DHIKR_PRESETS.map(preset => (
               <button
                 key={preset.id}
                 onClick={() => {
                   setActiveDhikr(preset);
-                  setShowPresets(false);
                   setCount(todayStats[preset.id] || 0);
+                  setShowPresets(false);
                 }}
-                className={`w-full text-left p-3 rounded-xl flex items-center gap-3 transition ${
+                className={`p-2.5 rounded-xl text-left border transition ${
                   activeDhikr.id === preset.id
-                    ? 'bg-indigo-500/20 border border-indigo-400/40'
-                    : 'hover:bg-white/5'
+                    ? 'border-indigo-500 bg-indigo-500/10'
+                    : 'border-white/8 bg-white/3 hover:bg-white/6'
                 }`}
               >
-                <div className="w-10 text-center">
-                  {preset.arabic ? (
-                    <span className="text-xl">{preset.arabic.charAt(0)}</span>
-                  ) : (
-                    <i className="fas fa-plus text-gray-400" />
-                  )}
-                </div>
-                <div className="flex-grow min-w-0">
-                  <p className="font-semibold text-sm">{preset.transliteration}</p>
-                  <p className="text-xs text-gray-400 truncate">{preset.meaning}</p>
-                </div>
-                <span className="text-xs text-gray-500 whitespace-nowrap">
-                  {preset.target > 0 ? `×${preset.target}` : ''}
-                </span>
+                <p className="text-xs font-bold truncate" style={{ color: preset.color }}>{preset.transliteration}</p>
+                {preset.arabic && <p className="text-[10px] text-gray-500 mt-0.5 truncate font-arabic">{preset.arabic.slice(0, 20)}…</p>}
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  {preset.target > 0 ? `${preset.target}x` : '∞'}
+                </p>
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* Main counter — big tap area */}
-      <div className="relative flex items-center justify-center mb-6">
-        {/* Progress ring */}
-        <svg className="absolute" width="260" height="260" viewBox="0 0 260 260">
-          <circle
-            cx="130" cy="130" r="110"
-            fill="none"
-            stroke="rgba(255,255,255,0.06)"
-            strokeWidth="8"
-          />
-          {activeDhikr.target > 0 && (
-            <circle
-              cx="130" cy="130" r="110"
-              fill="none"
-              stroke="var(--primary)"
-              strokeWidth="8"
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={strokeDashoffset}
-              transform="rotate(-90 130 130)"
-              style={{ transition: 'stroke-dashoffset 0.3s ease' }}
-            />
-          )}
-        </svg>
+      {/* Custom text input */}
+      {activeDhikr.id === 'custom' && (
+        <input
+          className="input-field"
+          placeholder="নিজের যিকির টাইপ করুন..."
+          value={customText}
+          onChange={e => setCustomText(e.target.value)}
+        />
+      )}
 
-        {/* Tap target */}
-        <div
-          ref={tapRef}
-          onClick={handleTap}
-          className="relative z-10 w-56 h-56 rounded-full flex flex-col items-center justify-center cursor-pointer select-none transition-transform active:scale-95"
-          style={{
-            background: 'radial-gradient(circle, rgba(99,102,241,0.15), rgba(99,102,241,0.05))',
-            border: '2px solid rgba(129,140,248,0.2)',
-            boxShadow: '0 0 40px rgba(129,140,248,0.1)',
-          }}
-          role="button"
-          aria-label="Tap to count"
-        >
-          {activeDhikr.arabic && (
-            <p className="text-lg mb-1 opacity-80" dir="rtl">{activeDhikr.arabic}</p>
-          )}
-          <p className="text-5xl font-extrabold" style={{ color: 'var(--primary)' }}>
-            {count.toLocaleString('bn-BD')}
-          </p>
-          {activeDhikr.target > 0 && (
-            <p className="text-xs text-gray-400 mt-1">
-              / {activeDhikr.target.toLocaleString('bn-BD')}
-              {' • '}
-              {Math.round(progress * 100)}%
-            </p>
-          )}
+      {/* Main counter */}
+      <div className="flex flex-col items-center gap-4">
+        {/* Progress ring */}
+        <div className="relative" style={{ width: 260, height: 260 }}>
+          <svg width="260" height="260" className="absolute inset-0">
+            <circle cx="130" cy="130" r="110" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="12" />
+            {activeDhikr.target > 0 && (
+              <circle
+                cx="130" cy="130" r="110"
+                fill="none"
+                stroke={activeDhikr.color}
+                strokeWidth="12"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                strokeDashoffset={strokeDashoffset}
+                transform="rotate(-90 130 130)"
+                style={{ transition: 'stroke-dashoffset 0.3s ease', filter: `drop-shadow(0 0 8px ${activeDhikr.color}50)` }}
+              />
+            )}
+          </svg>
+
+          {/* Tap button */}
+          <button
+            ref={tapRef}
+            onClick={handleTap}
+            className="absolute inset-0 flex flex-col items-center justify-center rounded-full transition-transform active:scale-95 select-none"
+            style={{ background: `radial-gradient(circle, ${activeDhikr.color}15, transparent)` }}
+          >
+            {activeDhikr.arabic && (
+              <p className="font-arabic text-base mb-2 text-center px-8 leading-relaxed" style={{ color: activeDhikr.color }}>
+                {activeDhikr.arabic}
+              </p>
+            )}
+            <p className="text-5xl font-extrabold tabular-nums text-white">{count.toLocaleString('bn-BD')}</p>
+            <p className="text-xs font-bold mt-2" style={{ color: activeDhikr.color }}>{displayName}</p>
+            {activeDhikr.target > 0 && (
+              <p className="text-[10px] text-gray-500 mt-1">
+                / {activeDhikr.target.toLocaleString('bn-BD')} • {Math.round(progress * 100)}%
+                {completedSets > 0 && ` • ${completedSets}x সম্পন্ন`}
+              </p>
+            )}
+            <p className="text-[10px] text-gray-600 mt-2">চাপুন</p>
+          </button>
         </div>
       </div>
 
       {/* Action buttons */}
-      <div className="flex gap-3 justify-center">
-        <button
-          onClick={handleUndo}
-          disabled={count === 0}
-          className="p-3 rounded-full bg-white/5 hover:bg-white/10 disabled:opacity-30 transition"
-          aria-label="Undo"
-        >
-          <i className="fas fa-undo text-lg" />
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={handleUndo} disabled={count === 0} className="btn btn-secondary text-sm">
+          <i className="fas fa-undo" />পূর্বাবস্থা
         </button>
-        <button
-          onClick={handleReset}
-          disabled={count === 0}
-          className="p-3 rounded-full bg-white/5 hover:bg-white/10 disabled:opacity-30 transition"
-          aria-label="Reset"
-        >
-          <i className="fas fa-redo text-lg" />
-        </button>
-        <button
-          onClick={() => setVibrate(!vibrate)}
-          className={`p-3 rounded-full transition ${vibrate ? 'bg-indigo-500/20 text-indigo-300' : 'bg-white/5'}`}
-          aria-label="Toggle vibration"
-        >
-          <i className={`fas ${vibrate ? 'fa-mobile-alt' : 'fa-mobile'} text-lg`} />
+        <button onClick={handleReset} disabled={count === 0} className="btn btn-danger text-sm">
+          <i className="fas fa-rotate-right" />রিসেট
         </button>
       </div>
 
+      {/* Meaning */}
+      {activeDhikr.meaning && (
+        <div className="card text-center" style={{ background: `${activeDhikr.color}08`, borderColor: `${activeDhikr.color}25` }}>
+          <p className="text-xs text-gray-300 italic">"{activeDhikr.meaning}"</p>
+        </div>
+      )}
+
       {/* Tip */}
-      <div className="mt-6 text-center text-xs text-gray-500">
-        <p>💡 সালাতের পর বসে ৩৩+৩৩+৩৪ = ১০০ বার যিকির করা সুন্নাত</p>
+      <div className="card text-center" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.15)' }}>
+        <p className="text-xs text-emerald-400">
+          💡 সালাতের পর ৩৩+৩৩+৩৪ = ১০০ বার যিকির করা সুন্নাত
+        </p>
       </div>
     </div>
   );

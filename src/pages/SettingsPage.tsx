@@ -1,450 +1,407 @@
-import { useRef, useState } from 'react';
-import {
-  signInWithGoogle, signOut, setAccessToken,
-  backupToGoogleDrive, restoreFromGoogleDrive,
-} from '../utils/googleDrive';
+import { useCallback, useState } from 'react';
+import { Modal } from '../components/Modal';
 import type { AppState } from '../utils/storage';
+import { DEFAULT_STATE } from '../utils/storage';
+import {
+  backupToGoogleDrive, restoreFromGoogleDrive, signInWithGoogle, signOut, getBackupInfo
+} from '../utils/googleDrive';
 
 interface Props {
   state: AppState;
-  onSetPin: (pin: string) => void;
-  onImport: (state: AppState) => void;
+  onImport: (s: AppState) => void;
   onClearAll: () => void;
-  onSetGoogleClientId: (clientId: string | null) => void;
+  onSetPin: (pin: string) => void;
+  onSetGoogleClientId: (id: string | null) => void;
   onSetGoogleAccessToken: (token: string | null) => void;
   onSetLastBackupTime: (time: string) => void;
   showToast: (msg: string) => void;
 }
 
 export function SettingsPage({
-  state, onSetPin, onImport, onClearAll,
-  onSetGoogleClientId, onSetGoogleAccessToken, onSetLastBackupTime, showToast,
+  state, onImport, onClearAll, onSetPin, onSetGoogleClientId,
+  onSetGoogleAccessToken, onSetLastBackupTime, showToast
 }: Props) {
-  const envGoogleClientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || '';
-  const effectiveGoogleClientId = state.googleClientId || envGoogleClientId;
-  const [pin, setPin] = useState('');
-  const [clientIdInput, setClientIdInput] = useState(state.googleClientId || envGoogleClientId || '');
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState(false);
+  const [pinModal, setPinModal] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [googleClientIdInput, setGoogleClientIdInput] = useState(state.googleClientId || '');
+  const [driveLoading, setDriveLoading] = useState(false);
   const [showPasteRestore, setShowPasteRestore] = useState(false);
-  const [pasteValue, setPasteValue] = useState('');
-  const fileInput = useRef<HTMLInputElement>(null);
+  const [pasteText, setPasteText] = useState('');
+  const [driveInfo, setDriveInfo] = useState<{ exists: boolean; modifiedTime?: string } | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
-  const isGoogleSignedIn = !!state.googleAccessToken;
+  const jsonStr = JSON.stringify(state, null, 2);
+  const assetCount = state.assets.length;
+  const liabCount = state.liabilities.length;
+  const salatDays = Object.keys(state.salatLog).length;
 
-  const handleGoogleSignIn = async () => {
-    if (!effectiveGoogleClientId) {
-      showToast('প্রথমে Google Client ID দিন');
-      return;
-    }
-    setGoogleLoading(true);
-    try {
-      const token = await signInWithGoogle(effectiveGoogleClientId);
-      onSetGoogleAccessToken(token);
-      setAccessToken(token);
-      showToast('Google সাইন-ইন সফল! ☁️');
-    } catch (err: any) {
-      const msg = String(err?.message || err || '');
-      if (msg.includes('access_denied') || msg.includes('403')) {
-        showToast('Google access blocked: OAuth verification/test user দরকার');
-      } else {
-        showToast(`সাইন-ইন ব্যর্থ: ${msg || 'অনুগ্রহ করে আবার চেষ্টা করুন'}`);
-      }
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  const handleGoogleSignOut = () => {
-    signOut();
-    onSetGoogleAccessToken(null);
-    showToast('Google সাইন-আউট সম্পন্ন');
-  };
-
-  const handleBackupToGoogle = async () => {
-    if (!state.googleAccessToken) {
-      showToast('প্রথমে Google সাইন-ইন করুন');
-      return;
-    }
-    setGoogleLoading(true);
-    try {
-      const content = JSON.stringify(state);
-      await backupToGoogleDrive(state.googleAccessToken, content);
-      const now = new Date().toISOString();
-      onSetLastBackupTime(now);
-      showToast('Google Drive এ ব্যাকআপ সফল! ☁️✅');
-    } catch (err: any) {
-      if (err.message?.includes('401') || err.message?.includes('invalid')) {
-        onSetGoogleAccessToken(null);
-        showToast('সেশন শেষ — আবার সাইন-ইন করুন');
-      } else {
-        showToast(`ব্যাকআপ ব্যর্থ: ${err.message}`);
-      }
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  const handleRestoreFromGoogle = async () => {
-    if (!state.googleAccessToken) {
-      showToast('প্রথমে Google সাইন-ইন করুন');
-      return;
-    }
-    if (!window.confirm('বর্তমান ডেটা মুছে Google Drive থেকে পুনরুদ্ধার করতে চান?')) return;
-    setGoogleLoading(true);
-    try {
-      const content = await restoreFromGoogleDrive(state.googleAccessToken);
-      if (!content) {
-        showToast('Google Drive এ কোনো ব্যাকআপ পাওয়া যায়নি');
-        return;
-      }
-      const parsed = JSON.parse(content);
-      onImport(parsed);
-      showToast('Google Drive থেকে পুনরুদ্ধার সফল! ☁️✅');
-    } catch (err: any) {
-      showToast(`পুনরুদ্ধার ব্যর্থ: ${err.message}`);
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  const handleExportFile = () => {
-    const data = JSON.stringify(state, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
+  // ─── Local backup ───
+  const handleDownloadBackup = useCallback(() => {
+    const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `zakat_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `amar_zakat_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('ব্যাকআপ ফাইল ডাউনলোড সম্পন্ন');
-  };
+    showToast('ব্যাকআপ ডাউনলোড হয়েছে ✅');
+  }, [jsonStr, showToast]);
 
-  const handleCopyBackup = async () => {
-    const data = JSON.stringify(state);
-    try {
-      await navigator.clipboard.writeText(data);
-      showToast('ব্যাকআপ কপি হয়েছে');
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = data;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      showToast('ব্যাকআপ কপি হয়েছে');
-    }
-  };
+  const handleCopyBackup = useCallback(() => {
+    navigator.clipboard.writeText(jsonStr).then(() => {
+      showToast('ব্যাকআপ টেক্সট কপি হয়েছে 📋');
+    }).catch(() => showToast('কপি হয়নি'));
+  }, [jsonStr, showToast]);
 
-  const handlePasteRestore = () => {
-    try {
-      const parsed = JSON.parse(pasteValue);
-      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid backup');
-      if (window.confirm('বর্তমান ডেটা মুছে এই backup restore করতে চান?')) {
-        onImport(parsed);
-        setPasteValue('');
-        setShowPasteRestore(false);
-        showToast('Backup restore হয়েছে');
-      }
-    } catch {
-      showToast('Backup text সঠিক নয়');
-    }
-  };
-
-  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileRestore = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = ev => {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
-        if (window.confirm('সকল বর্তমান ডেটা মুছে ব্যাকআপ পুনরুদ্ধার করতে চান?')) {
-          onImport(parsed);
-          showToast('ব্যাকআপ সফলভাবে পুনরুদ্ধার হয়েছে');
-        }
+        onImport({ ...DEFAULT_STATE, ...parsed });
+        showToast('ডেটা রিস্টোর হয়েছে ✅');
       } catch {
-        showToast('ব্যাকআপ ফাইল সঠিক নয়');
+        showToast('ফাইল পড়তে পারিনি ❌');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
-  };
+  }, [onImport, showToast]);
+
+  const handlePasteRestore = useCallback(() => {
+    try {
+      const parsed = JSON.parse(pasteText);
+      onImport({ ...DEFAULT_STATE, ...parsed });
+      showToast('ডেটা রিস্টোর হয়েছে ✅');
+      setShowPasteRestore(false);
+      setPasteText('');
+    } catch {
+      showToast('JSON পার্স করতে পারিনি ❌');
+    }
+  }, [pasteText, onImport, showToast]);
+
+  // ─── Google Drive ───
+  const handleGoogleBackup = useCallback(async () => {
+    if (!state.googleClientId) return showToast('আগে Client ID দিন');
+    setDriveLoading(true);
+    try {
+      let token = state.googleAccessToken;
+      if (!token) {
+        token = await signInWithGoogle(state.googleClientId);
+        onSetGoogleAccessToken(token);
+      }
+      const result = await backupToGoogleDrive(token, jsonStr);
+      const now = new Date().toISOString();
+      onSetLastBackupTime(now);
+      showToast(result.isNew ? 'Google Drive-এ নতুন ব্যাকআপ হয়েছে ✅' : 'Google Drive-এ ব্যাকআপ আপডেট হয়েছে ✅');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'অজানা ত্রুটি';
+      if (msg.includes('popup')) {
+        showToast('পপআপ ব্লক। আবার চেষ্টা করুন।');
+      } else {
+        showToast(`Google Drive ব্যাকআপ ব্যর্থ: ${msg.slice(0, 40)}`);
+        onSetGoogleAccessToken(null);
+      }
+    } finally {
+      setDriveLoading(false);
+    }
+  }, [state, jsonStr, onSetGoogleAccessToken, onSetLastBackupTime, showToast]);
+
+  const handleGoogleRestore = useCallback(async () => {
+    if (!state.googleClientId) return showToast('আগে Client ID দিন');
+    setDriveLoading(true);
+    try {
+      let token = state.googleAccessToken;
+      if (!token) {
+        token = await signInWithGoogle(state.googleClientId);
+        onSetGoogleAccessToken(token);
+      }
+      const content = await restoreFromGoogleDrive(token);
+      if (!content) return showToast('Google Drive-এ কোনো ব্যাকআপ নেই');
+      const parsed = JSON.parse(content);
+      onImport({ ...DEFAULT_STATE, ...parsed });
+      showToast('Google Drive থেকে রিস্টোর হয়েছে ✅');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'অজানা ত্রুটি';
+      showToast(`রিস্টোর ব্যর্থ: ${msg.slice(0, 40)}`);
+      onSetGoogleAccessToken(null);
+    } finally {
+      setDriveLoading(false);
+    }
+  }, [state, onSetGoogleAccessToken, onImport, showToast]);
+
+  const handleCheckDrive = useCallback(async () => {
+    if (!state.googleClientId) return showToast('আগে Client ID দিন');
+    setDriveLoading(true);
+    try {
+      let token = state.googleAccessToken;
+      if (!token) {
+        token = await signInWithGoogle(state.googleClientId);
+        onSetGoogleAccessToken(token);
+      }
+      const info = await getBackupInfo(token);
+      setDriveInfo(info);
+    } catch {
+      showToast('Drive চেক করতে পারিনি');
+      onSetGoogleAccessToken(null);
+    } finally {
+      setDriveLoading(false);
+    }
+  }, [state, onSetGoogleAccessToken, showToast]);
 
   return (
-    <div className="px-4 pt-6 pb-4">
-      <div className="text-center mb-5">
-        <h1 className="text-2xl font-bold">সেটিংস</h1>
-        <p className="text-sm text-gray-400">আপনার অ্যাপ কনফিগার করুন</p>
+    <div className="px-4 pt-5 space-y-4 page-enter">
+      {/* Header */}
+      <div>
+        <h1 className="text-xl font-bold gradient-text">সেটিংস</h1>
+        <p className="text-xs text-gray-400 mt-0.5">ব্যাকআপ, রিস্টোর ও অ্যাপ কনফিগার</p>
       </div>
 
-      {/* === Backup First === */}
-      <div className="card border border-emerald-500/20" style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.08), rgba(99,102,241,0.06))' }}>
-        <div className="card-title">
-          <i className="fas fa-shield-heart text-emerald-400" />
-          নিরাপদ ব্যাকআপ
-        </div>
-        <p className="text-xs text-gray-400 mb-3">
-          Google verification সমস্যা থাকলেও এই ৩টি পদ্ধতিতে আপনার ডেটা সেভ/রিস্টোর করা যাবে।
+      {/* Data overview */}
+      <div className="card">
+        <p className="card-title text-sm">
+          <i className="fas fa-database text-indigo-400" />আপনার ডেটা
         </p>
-        <div className="space-y-3">
-          <button onClick={handleExportFile} className="btn btn-primary">
-            <i className="fas fa-download" /> Backup ফাইল ডাউনলোড
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="p-2 rounded-xl bg-white/3">
+            <p className="text-2xl font-extrabold text-emerald-400">{assetCount}</p>
+            <p className="text-[10px] text-gray-400">সম্পদ</p>
+          </div>
+          <div className="p-2 rounded-xl bg-white/3">
+            <p className="text-2xl font-extrabold text-rose-400">{liabCount}</p>
+            <p className="text-[10px] text-gray-400">দায়</p>
+          </div>
+          <div className="p-2 rounded-xl bg-white/3">
+            <p className="text-2xl font-extrabold text-sky-400">{salatDays}</p>
+            <p className="text-[10px] text-gray-400">সালাত দিন</p>
+          </div>
+        </div>
+        {state.lastBackupTime && (
+          <p className="text-[10px] text-gray-500 text-center mt-3">
+            <i className="fas fa-clock mr-1" />সর্বশেষ ব্যাকআপ: {new Date(state.lastBackupTime).toLocaleString('bn-BD')}
+          </p>
+        )}
+      </div>
+
+      {/* Local Backup */}
+      <div className="card">
+        <p className="card-title text-sm">
+          <i className="fas fa-hard-drive text-sky-400" />লোকাল ব্যাকআপ
+        </p>
+        <div className="space-y-2">
+          <button onClick={handleDownloadBackup} className="btn btn-secondary text-sm">
+            <i className="fas fa-download" />JSON ফাইল ডাউনলোড
           </button>
-          <button onClick={handleCopyBackup} className="btn btn-secondary">
-            <i className="fas fa-copy" /> Backup text কপি
+          <button onClick={handleCopyBackup} className="btn btn-secondary text-sm">
+            <i className="fas fa-copy" />ব্যাকআপ টেক্সট কপি
           </button>
-          <button onClick={() => setShowPasteRestore(!showPasteRestore)} className="btn btn-secondary">
-            <i className="fas fa-paste" /> Backup text থেকে Restore
+          <label className="btn btn-secondary text-sm cursor-pointer">
+            <i className="fas fa-upload" />JSON ফাইল থেকে রিস্টোর
+            <input type="file" accept=".json" className="hidden" onChange={handleFileRestore} />
+          </label>
+          <button
+            onClick={() => setShowPasteRestore(!showPasteRestore)}
+            className="btn btn-secondary text-sm"
+          >
+            <i className="fas fa-paste" />টেক্সট পেস্ট করে রিস্টোর
           </button>
           {showPasteRestore && (
-            <div className="space-y-2">
+            <div className="space-y-2 mt-2">
               <textarea
-                className="input-field min-h-32 text-xs"
-                placeholder="এখানে backup text paste করুন..."
-                value={pasteValue}
-                onChange={(e) => setPasteValue(e.target.value)}
+                className="input-field h-28 resize-none"
+                placeholder="এখানে JSON ব্যাকআপ পেস্ট করুন..."
+                value={pasteText}
+                onChange={e => setPasteText(e.target.value)}
               />
-              <button onClick={handlePasteRestore} className="btn btn-primary text-sm">
-                <i className="fas fa-check" /> Restore করুন
+              <button onClick={handlePasteRestore} disabled={!pasteText.trim()} className="btn btn-primary text-sm">
+                <i className="fas fa-check" />রিস্টোর করুন
               </button>
             </div>
           )}
-          <button onClick={() => fileInput.current?.click()} className="btn btn-secondary">
-            <i className="fas fa-upload" /> Backup ফাইল থেকে Restore
-          </button>
-          <input ref={fileInput} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
         </div>
-      </div>
-
-      {/* === Google Drive Backup === */}
-      <div className="card">
-        <div className="card-title">
-          <i className="fab fa-google" style={{ color: '#4285F4' }} />
-          Google Drive ব্যাকআপ (ঐচ্ছিক)
-          {isGoogleSignedIn && (
-            <span className="ml-auto text-xs text-emerald-400 font-normal">
-              <i className="fas fa-circle text-[8px] mr-1" /> সংযুক্ত
-            </span>
-          )}
-        </div>
-
-        <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-100 space-y-1">
-          <p className="font-semibold text-amber-300">
-            <i className="fas fa-triangle-exclamation mr-1" /> Google access blocked হলে কারণ
-          </p>
-          <p>Google বলছে এই OAuth app verified নয়। তাই developer-approved tester না হলে access বন্ধ থাকবে।</p>
-          <p className="text-amber-200/80">সমাধান: OAuth consent screen এ আপনার Gmail test user হিসেবে add করতে হবে, অথবা app production verification complete করতে হবে।</p>
-        </div>
-
-        {/* Client ID input */}
-        {!effectiveGoogleClientId && (
-          <div className="mb-4">
-            <label className="block text-xs text-gray-400 mb-1">Google OAuth Client ID</label>
-            <input
-              type="text"
-              className="input-field text-xs"
-              placeholder="xxxxxxxxxxxx-xxxxx.apps.googleusercontent.com"
-              value={clientIdInput}
-              onChange={(e) => setClientIdInput(e.target.value)}
-            />
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => {
-                  if (clientIdInput.trim()) {
-                    onSetGoogleClientId(clientIdInput.trim());
-                    showToast('Client ID সেভ হয়েছে');
-                  }
-                }}
-                className="btn btn-primary flex-1 text-sm"
-              >
-                <i className="fas fa-save" /> সেভ করুন
-              </button>
-              <button
-                onClick={() => setShowSetupGuide(!showSetupGuide)}
-                className="btn btn-secondary flex-1 text-sm"
-              >
-                <i className="fas fa-question-circle" /> কিভাবে পাবো?
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Setup Guide */}
-        {showSetupGuide && (
-          <div className="text-xs text-gray-300 bg-black/30 p-4 rounded-xl space-y-2 mb-4">
-            <p className="font-bold text-amber-300">📋 Google Client ID তৈরির নির্দেশিকা:</p>
-            <ol className="list-decimal pl-4 space-y-1">
-              <li>
-                <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" className="text-indigo-300 underline">
-                  Google Cloud Console
-                </a> এ যান
-              </li>
-              <li>নতুন প্রজেক্ট তৈরি করুন (অথবা বিদ্যমান ব্যবহার করুন)</li>
-              <li><strong>APIs & Services → Library</strong> এ যান এবং <strong>Google Drive API</strong> সক্রিয় করুন</li>
-              <li><strong>APIs & Services → Credentials</strong> এ যান</li>
-              <li><strong>Create Credentials → OAuth 2.0 Client ID</strong> নির্বাচন করুন</li>
-              <li>Application type: <strong>Web application</strong></li>
-              <li>
-                <strong>Authorized JavaScript origins</strong> এ আপনার সাইটের URL যোগ করুন
-                <br />
-                <code className="text-amber-300">({window.location.origin})</code>
-              </li>
-              <li><strong>OAuth consent screen → Test users</strong> এ আপনার Gmail যোগ করুন</li>
-              <li>Publishing status যদি Testing হয়, শুধু test users login করতে পারবে</li>
-              <li>Client ID কপি করে উপরে পেস্ট করুন</li>
-            </ol>
-            <button
-              onClick={() => setShowSetupGuide(false)}
-              className="text-indigo-300 underline mt-2"
-            >
-              বন্ধ করুন
-            </button>
-          </div>
-        )}
-
-        {/* Signed in state */}
-        {effectiveGoogleClientId && !isGoogleSignedIn && (
-          <div className="space-y-3">
-            {envGoogleClientId && !state.googleClientId && (
-              <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl">
-                <i className="fas fa-cloud mr-1" /> Cloudflare environment থেকে Google Client ID loaded.
-              </div>
-            )}
-            <button
-              onClick={handleGoogleSignIn}
-              disabled={googleLoading}
-              className="btn btn-secondary"
-            >
-              {googleLoading ? (
-                <><i className="fas fa-spinner spin" /> লোড হচ্ছে...</>
-              ) : (
-                <><i className="fab fa-google" /> Google দিয়ে সাইন-ইন করুন</>
-              )}
-            </button>
-            <button
-              onClick={() => {
-                onSetGoogleClientId(null);
-                setClientIdInput('');
-                showToast('Client ID মুছে ফেলা হয়েছে');
-              }}
-              className="text-xs text-gray-500 hover:text-gray-300 w-full text-center"
-            >
-              Client ID পরিবর্তন করুন
-            </button>
-          </div>
-        )}
-
-        {isGoogleSignedIn && (
-          <div className="space-y-3">
-            <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl text-sm text-emerald-300">
-              <i className="fas fa-check-circle mr-2" />
-              Google Drive সংযুক্ত
-              {state.lastBackupTime && (
-                <p className="text-xs text-emerald-400/70 mt-1">
-                  শেষ ব্যাকআপ: {new Date(state.lastBackupTime).toLocaleString('bn-BD')}
-                </p>
-              )}
-            </div>
-            <button onClick={handleBackupToGoogle} disabled={googleLoading} className="btn btn-primary">
-              {googleLoading ? (
-                <><i className="fas fa-spinner spin" /> ব্যাকআপ হচ্ছে...</>
-              ) : (
-                <><i className="fas fa-cloud-upload-alt" /> Google Drive এ ব্যাকআপ করুন</>
-              )}
-            </button>
-            <button onClick={handleRestoreFromGoogle} disabled={googleLoading} className="btn btn-secondary">
-              {googleLoading ? (
-                <><i className="fas fa-spinner spin" /> পুনরুদ্ধার হচ্ছে...</>
-              ) : (
-                <><i className="fas fa-cloud-download-alt" /> Google Drive থেকে পুনরুদ্ধার করুন</>
-              )}
-            </button>
-            <button onClick={handleGoogleSignOut} className="text-xs text-gray-500 hover:text-gray-300 w-full text-center">
-              <i className="fas fa-sign-out-alt mr-1" /> Google থেকে সাইন-আউট
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* === PIN === */}
-      <div className="card">
-        <div className="card-title">
-          <i className="fas fa-shield-halved" style={{ color: 'var(--primary)' }} />
-          নিরাপত্তা পিন
-        </div>
-        <p className="text-xs text-gray-400 mb-3">
-          {state.pin ? '✅ পিন সেট করা আছে' : 'পিন সেট করা হয়নি'}
+        <p className="text-[10px] text-gray-500 mt-3 text-center">
+          <i className="fas fa-info-circle mr-1" />সব ডেটা আপনার browser-এ সংরক্ষিত
         </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (pin.length !== 4 || !/^\d+$/.test(pin)) {
-              showToast('পিন অবশ্যই ৪ সংখ্যার হতে হবে');
-              return;
-            }
-            onSetPin(pin);
-            setPin('');
-            showToast('পিন সফলভাবে সেভ হয়েছে');
-          }}
-          className="space-y-3"
-        >
-          <input
-            type="password"
-            inputMode="numeric"
-            maxLength={4}
-            placeholder="৪-সংখ্যার পিন"
-            className="input-field text-center tracking-[0.5em] text-2xl"
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-          />
-          <button type="submit" className="btn btn-primary">
-            <i className="fas fa-save" /> পিন সেভ করুন
-          </button>
-        </form>
       </div>
 
-      {/* === Danger zone === */}
-      <div className="card border border-red-500/20">
-        <div className="card-title text-red-400">
-          <i className="fas fa-exclamation-triangle" />
-          বিপদজনক এলাকা
+      {/* Google Drive */}
+      <div className="card">
+        <p className="card-title text-sm">
+          <i className="fas fa-cloud text-blue-400" />Google Drive ব্যাকআপ (Optional)
+        </p>
+        <div className="space-y-3">
+          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300">
+            <i className="fas fa-info-circle mr-1" />Google verification সমস্যা থাকলেও লোকাল ব্যাকআপ ব্যবহার করুন।
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Google OAuth Client ID</label>
+            <input
+              className="input-field text-xs"
+              placeholder="xxxxx.apps.googleusercontent.com"
+              value={googleClientIdInput}
+              onChange={e => setGoogleClientIdInput(e.target.value)}
+            />
+          </div>
+          <button
+            onClick={() => {
+              onSetGoogleClientId(googleClientIdInput.trim() || null);
+              showToast(googleClientIdInput.trim() ? 'Client ID সেভ হয়েছে' : 'Client ID মুছা হয়েছে');
+            }}
+            className="btn btn-secondary text-sm"
+          >
+            <i className="fas fa-save" />Client ID সংরক্ষণ
+          </button>
+
+          {state.googleAccessToken && (
+            <button
+              onClick={() => { signOut(); onSetGoogleAccessToken(null); showToast('Google থেকে সাইন আউট হয়েছে'); }}
+              className="btn btn-danger text-sm"
+            >
+              <i className="fas fa-right-from-bracket" />Google Sign Out
+            </button>
+          )}
+
+          {driveInfo && (
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs">
+              <p className="text-emerald-400 font-semibold">
+                {driveInfo.exists ? '✅ Drive-এ ব্যাকআপ আছে' : '❌ Drive-এ কোনো ব্যাকআপ নেই'}
+              </p>
+              {driveInfo.modifiedTime && (
+                <p className="text-gray-400 mt-1">সর্বশেষ: {new Date(driveInfo.modifiedTime).toLocaleString('bn-BD')}</p>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={handleCheckDrive} disabled={driveLoading || !state.googleClientId} className="btn btn-secondary text-xs">
+              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-up'}`} />চেক
+            </button>
+            <button onClick={handleGoogleBackup} disabled={driveLoading || !state.googleClientId} className="btn btn-primary text-xs">
+              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-up'}`} />ব্যাকআপ
+            </button>
+            <button onClick={handleGoogleRestore} disabled={driveLoading || !state.googleClientId} className="btn btn-secondary text-xs">
+              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-down'}`} />রিস্টোর
+            </button>
+          </div>
         </div>
-        <button
-          onClick={() => {
-            if (window.confirm('সতর্কতা: এই কাজটি পূর্বাবস্থায় ফেরানো যাবে না!\n\nসকল ডেটা (সম্পদ, দায়, সালাত লগ, তাসবীহ) চিরতরে মুছে যাবে।\n\nআপনি কি সত্যিই এগিয়ে যেতে চান?')) {
-              onClearAll();
-              showToast('সকল ডেটা মুছে ফেলা হয়েছে');
-            }
-          }}
-          className="btn btn-danger"
-        >
-          <i className="fas fa-trash" /> সকল ডেটা মুছে ফেলুন
+      </div>
+
+      {/* PIN Lock */}
+      <div className="card">
+        <p className="card-title text-sm">
+          <i className="fas fa-lock text-amber-400" />পিন লক
+        </p>
+        <p className="text-xs text-gray-400 mb-3">
+          {state.pin ? '✅ পিন সেট আছে' : 'অ্যাপ লক করুন (আসছে শীঘ্রই)'}
+        </p>
+        <button onClick={() => setPinModal(true)} className="btn btn-secondary text-sm">
+          <i className="fas fa-key" />{state.pin ? 'পিন পরিবর্তন' : 'পিন সেট করুন'}
         </button>
       </div>
 
-      {/* === About === */}
-      <div className="card text-xs text-gray-400 leading-relaxed">
-        <div className="card-title text-sm">
-          <i className="fas fa-mosque" style={{ color: 'var(--primary)' }} />
-          আমার যাকাত অ্যাপ
-        </div>
-        <p className="mb-2">
-          এই অ্যাপটি একজন মুসলিমের দৈনন্দিন জীবনের জন্য প্রয়োজনীয় সকল টুল সমন্বিত একটি সম্পূর্ণ ইসলামিক টুলকিট:
+      {/* Danger Zone */}
+      <div className="card border-red-500/20">
+        <p className="card-title text-sm text-red-400">
+          <i className="fas fa-triangle-exclamation text-red-400" />বিপদ জোন
         </p>
-        <ul className="list-disc pl-4 space-y-1 mb-2">
-          <li><strong>যাকাত ক্যালকুলেটর</strong> — ৯ ধরনের সম্পদ, দায় বাদ, হাওল ট্র্যাকিং</li>
-          <li><strong>সালাত ট্র্যাকার</strong> — নামাজের সময়, জামাত লগ</li>
-          <li><strong>কিবলা কম্পাস</strong> — দিকনির্দেশ</li>
-          <li><strong>তাসবীহ কাউন্টার</strong> — ডিজিটাল তাসবীহ</li>
-          <li><strong>দোয়া সংকলন</strong> — দৈনিক দোয়া</li>
-          <li><strong>Google Drive ব্যাকআপ</strong> — ক্লাউডে সেভ</li>
-        </ul>
-        <p className="text-center text-gray-500 mt-2">
-          🤲 আল্লাহ আমাদের সকলের যাকাত ও ইবাদত কবুল করুন
-        </p>
+        {!clearConfirm ? (
+          <button onClick={() => setClearConfirm(true)} className="btn btn-danger text-sm">
+            <i className="fas fa-trash" />সব ডেটা মুছুন
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-red-300 text-center font-semibold">নিশ্চিত? সব ডেটা মুছে যাবে!</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => setClearConfirm(false)} className="btn btn-secondary text-sm">বাতিল</button>
+              <button
+                onClick={() => { onClearAll(); setClearConfirm(false); showToast('সব ডেটা মুছে গেছে'); }}
+                className="btn btn-danger text-sm"
+              >
+                হ্যাঁ, মুছুন
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* About */}
+      <div className="card text-center">
+        <button onClick={() => setAboutOpen(true)} className="flex items-center justify-center gap-2 w-full">
+          <span className="text-2xl">🌙</span>
+          <div className="text-left">
+            <p className="font-bold text-sm">আমার যাকাত</p>
+            <p className="text-xs text-gray-400">বাংলা মুসলিম টুলকিট v2.0</p>
+          </div>
+        </button>
+      </div>
+
+      {/* PIN Modal */}
+      <Modal open={pinModal} onClose={() => setPinModal(false)} title="পিন সেট করুন">
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">নতুন পিন (৪-৬ সংখ্যা)</label>
+            <input className="input-field" type="password" inputMode="numeric" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="••••" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">পিন নিশ্চিত করুন</label>
+            <input className="input-field" type="password" inputMode="numeric" maxLength={6} value={pinConfirm} onChange={e => setPinConfirm(e.target.value)} placeholder="••••" />
+          </div>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              if (pinInput.length < 4) return showToast('পিন কমপক্ষে ৪ সংখ্যা হতে হবে');
+              if (pinInput !== pinConfirm) return showToast('পিন মিলছে না');
+              onSetPin(pinInput);
+              setPinModal(false);
+              setPinInput('');
+              setPinConfirm('');
+              showToast('পিন সেট হয়েছে ✅');
+            }}
+          >
+            <i className="fas fa-lock" />পিন সেভ করুন
+          </button>
+          {state.pin && (
+            <button
+              className="btn btn-danger"
+              onClick={() => { onSetPin(''); setPinModal(false); showToast('পিন মুছা হয়েছে'); }}
+            >
+              <i className="fas fa-unlock" />পিন মুছুন
+            </button>
+          )}
+        </div>
+      </Modal>
+
+      {/* About Modal */}
+      <Modal open={aboutOpen} onClose={() => setAboutOpen(false)} title="আমার যাকাত সম্পর্কে">
+        <div className="space-y-4 text-center">
+          <div className="text-5xl mb-4">🌙</div>
+          <h2 className="text-xl font-bold gradient-text">আমার যাকাত</h2>
+          <p className="text-sm text-gray-400">বাংলা মুসলিম টুলকিট</p>
+          <div className="space-y-2 text-left">
+            {[
+              ['যাকাত ক্যালকুলেটর', 'হানাফি ফিকহ অনুযায়ী তারিখ-সচেতন হাওল ট্র্যাকিং', 'fa-shield-halved text-indigo-400'],
+              ['সালাত ট্র্যাকার', 'সঠিক নামাজের সময়, কিবলা ও সাপ্তাহিক রিপোর্ট', 'fa-mosque text-emerald-400'],
+              ['তাসবীহ কাউন্টার', 'একাধিক যিকিরের জন্য ডিজিটাল তাসবীহ', 'fa-hands-praying text-amber-400'],
+              ['দোয়া সংকলন', 'দৈনন্দিন জীবনের গুরুত্বপূর্ণ দোয়া', 'fa-book-quran text-sky-400'],
+            ].map(([title, desc, icon]) => (
+              <div key={title} className="flex items-start gap-3 p-3 rounded-xl bg-white/3">
+                <i className={`fas ${icon} mt-0.5`} />
+                <div>
+                  <p className="text-sm font-semibold">{title}</p>
+                  <p className="text-xs text-gray-400">{desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-3 rounded-xl bg-white/3 text-xs text-gray-400">
+            সব ডেটা আপনার ব্রাউজারে সংরক্ষিত। কোনো ডেটা সার্ভারে পাঠানো হয় না।
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
