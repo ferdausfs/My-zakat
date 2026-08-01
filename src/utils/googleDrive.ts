@@ -37,6 +37,37 @@ let pendingToken: {
   reject: (e: Error) => void;
 } | null = null;
 
+/** Rich Drive API error — carries HTTP status + Google's machine-readable reason. */
+export class DriveError extends Error {
+  status: number;
+  reason: string;
+  constructor(context: string, status: number, reason: string) {
+    super(`${context}:${status}${reason ? ':' + reason : ''}`);
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+/**
+ * fetch() wrapper for Drive calls. Network failure → DriveError(status 0).
+ * Non-OK responses → DriveError with status + parsed reason so the UI can
+ * tell "token expired" apart from "Drive API disabled" / "missing scope".
+ */
+async function driveFetch(context: string, url: string, init: RequestInit): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new DriveError(context, 0, 'network');
+  }
+  if (!res.ok) {
+    let reason = '';
+    try { reason = (await res.clone().json())?.error?.errors?.[0]?.reason || ''; } catch { /* ignore */ }
+    throw new DriveError(context, res.status, reason);
+  }
+  return res;
+}
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
@@ -136,10 +167,9 @@ export function revokeGoogleToken(token: string | null): void {
 }
 
 export async function fetchGoogleUser(token: string): Promise<GoogleUser | null> {
-  const res = await fetch(`${DRIVE_API_BASE}/about?fields=user`, {
+  const res = await driveFetch('about', `${DRIVE_API_BASE}/about?fields=user`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('about_failed');
   const data = await res.json();
   if (!data?.user?.emailAddress) return null;
   return {
@@ -151,10 +181,9 @@ export async function fetchGoogleUser(token: string): Promise<GoogleUser | null>
 
 async function findBackupFile(token: string): Promise<{ id: string; modifiedTime?: string } | null> {
   const q = encodeURIComponent(`name='${BACKUP_FILE_NAME}' and trashed=false`);
-  const res = await fetch(`${DRIVE_API_BASE}/files?q=${q}&fields=files(id,name,modifiedTime)`, {
+  const res = await driveFetch('search', `${DRIVE_API_BASE}/files?q=${q}&fields=files(id,name,modifiedTime)`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('drive_search_failed');
   const data = await res.json();
   const f = data.files?.[0];
   return f ? { id: f.id, modifiedTime: f.modifiedTime } : null;
@@ -163,24 +192,22 @@ async function findBackupFile(token: string): Promise<{ id: string; modifiedTime
 export async function backupToGoogleDrive(token: string, content: string): Promise<{ fileId: string; isNew: boolean }> {
   const existing = await findBackupFile(token);
   if (existing) {
-    const res = await fetch(`${DRIVE_UPLOAD_BASE}/files/${existing.id}?uploadType=media`, {
+    await driveFetch('update', `${DRIVE_UPLOAD_BASE}/files/${existing.id}?uploadType=media`, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: content,
     });
-    if (!res.ok) throw new Error('drive_update_failed');
     return { fileId: existing.id, isNew: false };
   }
   const metadata = JSON.stringify({ name: BACKUP_FILE_NAME, mimeType: 'application/json' });
   const form = new FormData();
   form.append('metadata', new Blob([metadata], { type: 'application/json' }));
   form.append('file', new Blob([content], { type: 'application/json' }));
-  const res = await fetch(`${DRIVE_UPLOAD_BASE}/files?uploadType=multipart`, {
+  const res = await driveFetch('upload', `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   });
-  if (!res.ok) throw new Error('drive_upload_failed');
   const data = await res.json();
   return { fileId: data.id, isNew: true };
 }
@@ -188,10 +215,9 @@ export async function backupToGoogleDrive(token: string, content: string): Promi
 export async function restoreFromGoogleDrive(token: string): Promise<string | null> {
   const file = await findBackupFile(token);
   if (!file) return null;
-  const res = await fetch(`${DRIVE_API_BASE}/files/${file.id}?alt=media`, {
+  const res = await driveFetch('download', `${DRIVE_API_BASE}/files/${file.id}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('drive_download_failed');
   return res.text();
 }
 

@@ -4,6 +4,14 @@ import type { AppState } from '../utils/storage';
 import { signInWithGoogle, revokeGoogleToken } from '../utils/googleDrive';
 import { GOOGLE_SYNC_ENABLED } from '../config';
 
+/** আসল কারণ বাংলায় — App-এর classifySyncError কোড অনুযায়ী। */
+const SYNC_ERROR_TEXT: Record<string, string> = {
+  auth: 'Google সেশনের মেয়াদ শেষ হয়েছে — একবার আবার সাইন ইন করলেই ঠিক হয়ে যাবে। আপনার ডেটা নিরাপদ আছে, কিছু হারাবে না।',
+  api_disabled: 'অ্যাপ-মালিকের Google Console প্রজেক্টে Google Drive API Enable করা নেই। সমাধান: GOOGLE_SETUP.md-এর ধাপ ২ দেখুন।',
+  scope_or_api: 'OAuth consent screen-এ drive.file scope যোগ করা নেই — অথবা Google Drive API Enable হয়নি। সমাধান: GOOGLE_SETUP.md-এর ধাপ ২ ও ৩ দেখুন।',
+  network: 'মুহূর্তের জন্য ইন্টারনেটে সমস্যা মনে হচ্ছে — সংযোগ ফিরলেই আবার সিঙ্ক হবে।',
+};
+
 interface Props {
   state: AppState;
   onImport: (s: AppState) => void;
@@ -242,10 +250,28 @@ export function SettingsPage({
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-emerald-300 truncate">{state.googleEmail || 'Google অ্যাকাউন্ট'}</p>
                 <p className="text-[10px] text-gray-400">
-                  অটো-সিঙ্ক চালু{state.lastSyncTime ? ` · শেষ সিঙ্ক: ${new Date(state.lastSyncTime).toLocaleString('bn-BD')}` : ''}
+                  {state.lastSyncError ? 'সাইন ইন আছে · সিঙ্ক আটকে আছে' : 'অটো-সিঙ্ক চালু'}
+                  {state.lastSyncTime ? ` · শেষ সিঙ্ক: ${new Date(state.lastSyncTime).toLocaleString('bn-BD')}` : ''}
                 </p>
               </div>
             </div>
+
+            {/* সিঙ্ক এরর — আসল কারণ স্পষ্ট করে */}
+            {state.lastSyncError && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 space-y-2">
+                <p className="text-xs text-red-300 font-semibold">⚠️ সিঙ্কে সমস্যা হচ্ছে</p>
+                <p className="text-xs text-gray-300 leading-relaxed">
+                  {SYNC_ERROR_TEXT[state.lastSyncError] || SYNC_ERROR_TEXT.network}
+                </p>
+                {state.lastSyncError === 'auth' ? (
+                  <button onClick={handleSignIn} disabled={syncBusy !== null} className="btn btn-primary text-xs">
+                    <i className={`fas ${syncBusy === 'signin' ? 'fa-spinner spin' : 'fa-rotate-right'}`} />আবার সাইন ইন করুন
+                  </button>
+                ) : (
+                  <p className="text-[10px] text-gray-500">স্থায়ী সমাধান হলে পরের পরিবর্তনে আবার সিঙ্ক হবে — অথবা নিচের <b>এখনই সিঙ্ক</b> চাপুন।</p>
+                )}
+              </div>
+            )}
 
             <p className="text-[11px] text-gray-500">
               <i className="fas fa-bolt mr-1 text-emerald-400" />

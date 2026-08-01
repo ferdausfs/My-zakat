@@ -79,6 +79,8 @@ git add . && git commit -m "enable Google sign-in auto-sync" && git push
 
 | লক্ষণ | কারণ/সমাধান |
 |---|---|
+| সাইন-ইন হয়, কিন্তু সিঙ্ক হয় না (সেটিংসে লাল কার্ড) | **Drive API Enable নেই** → ধাপ ২; অথবা **drive.file scope যোগ হয়নি** → ধাপ ৩। অ্যাপের লাল কার্ডে ঠিক কোনটা, লেখা থাকবে |
+| সাইন-ইন করেই সাইন-আউট হয়ে যায় (পুরনো ভার্সন) | পুরনো বিল্ডের বাগ — নতুন বিল্ডে ঠিক আছে; তবু সিঙ্ক এরর কার্ডে আসল কারণ দেখুন |
 | "Access blocked: ... invalid origin" | ধাপ ৪-এ ঐ origin টা authorized origins-এ যোগ হয়নি (https/পোর্ট মিলিয়ে দেখুন) |
 | "Access blocked: This app is blocked" | OAuth consent screen তৈরি হয়নি/প্রকাশিত নয় — ধাপ ৩ দেখুন |
 | "Access blocked: ... has not completed the Google verification process" | Testing মোড: ব্যবহারকারীর Gmail টা Test users-এ যোগ করুন |

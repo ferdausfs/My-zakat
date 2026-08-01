@@ -77,9 +77,20 @@ export default function App() {
   const ensureFreshToken = useCallback(async (): Promise<string> => {
     const s = stateRef.current;
     if (isTokenValid(s.googleAccessToken, s.googleTokenExpiry)) return s.googleAccessToken as string;
-    const tr = await silentRefreshToken(); // throws → caller marks signed-out
+    const tr = await silentRefreshToken().catch((e: unknown) => {
+      throw new Error(`silent_refresh:${e instanceof Error ? e.message : String(e)}`);
+    });
     setState(prev => ({ ...prev, googleAccessToken: tr.token, googleTokenExpiry: tr.expiresAt }));
     return tr.token;
+  }, []);
+
+  /** Map a sync failure to a user-facing code (see Settings SYNC_ERROR_TEXT). */
+  const classifySyncError = useCallback((err: unknown): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith('silent_refresh') || /:401(:|$)/.test(msg)) return 'auth';
+    if (msg.includes('accessNotConfigured')) return 'api_disabled';
+    if (msg.includes('insufficientPermissions') || /:403(:|$)/.test(msg)) return 'scope_or_api';
+    return 'network';
   }, []);
 
   /** Push current state to the signed-in user's Google Drive. */
@@ -90,18 +101,18 @@ export default function App() {
     try {
       const token = await ensureFreshToken();
       await backupToGoogleDrive(token, JSON.stringify(stateRef.current));
-      setState(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
+      setState(prev => ({ ...prev, lastSyncTime: new Date().toISOString(), lastSyncError: null }));
       return true;
-    } catch {
-      // Sync/refresh failed → mark signed out so the user re-logs next time
-      setState(prev => (prev.googleAccessToken
-        ? { ...prev, googleAccessToken: null, googleTokenExpiry: null }
-        : prev));
+    } catch (err) {
+      // ⚠️ কখনোই এররের কারণে সেশন মুছি না — শুধু কারণটা রেকর্ড করি যাতে
+      // সেটিংসে দেখা যায়। নেটওয়ার্ক ফিরলে পরের পরিবর্তনে আবার চেষ্টা হবে।
+      const code = classifySyncError(err);
+      setState(prev => ({ ...prev, lastSyncError: code }));
       return false;
     } finally {
       syncingRef.current = false;
     }
-  }, [ensureFreshToken]);
+  }, [ensureFreshToken, classifySyncError]);
 
   /** Pull from Drive when the remote copy is newer than our last sync. */
   const pullFromDrive = useCallback(async (force = false): Promise<boolean> => {
@@ -126,11 +137,13 @@ export default function App() {
         lastSyncTime: new Date().toISOString(),
       }));
       showToast('☁️ Google Drive থেকে সর্বশেষ ডেটা এসেছে');
+      setState(prev => ({ ...prev, lastSyncError: null }));
       return true;
-    } catch {
-      return false; // offline / remote unreadable — stay on local data
+    } catch (err) {
+      setState(prev => ({ ...prev, lastSyncError: classifySyncError(err) }));
+      return false; // stay on local data — session is kept
     }
-  }, [ensureFreshToken, showToast]);
+  }, [ensureFreshToken, classifySyncError, showToast]);
 
   // Auto-push: 3s after any real content change while signed in.
   useEffect(() => {
@@ -151,7 +164,7 @@ export default function App() {
 
   // Called by Settings after an interactive Google sign-in.
   const handleGoogleSignedIn = useCallback((auth: { token: string; expiresAt: number; email: string | null }) => {
-    setState(s => ({ ...s, googleAccessToken: auth.token, googleTokenExpiry: auth.expiresAt, googleEmail: auth.email }));
+    setState(s => ({ ...s, googleAccessToken: auth.token, googleTokenExpiry: auth.expiresAt, googleEmail: auth.email, lastSyncError: null }));
     // After the state settles, pull newer remote data (fresh device → gets its data back)
     setTimeout(() => {
       pullFromDrive().then(pulled => {
@@ -161,7 +174,7 @@ export default function App() {
   }, [pullFromDrive, showToast]);
 
   const handleGoogleSignedOut = useCallback(() => {
-    setState(s => ({ ...s, googleAccessToken: null, googleTokenExpiry: null, googleEmail: null }));
+    setState(s => ({ ...s, googleAccessToken: null, googleTokenExpiry: null, googleEmail: null, lastSyncError: null }));
   }, []);
 
   // ─── Asset callbacks ───

@@ -39,6 +39,8 @@ export interface AppState {
   googleEmail: string | null;
   /** ISO time of the last successful cloud sync (local clock). */
   lastSyncTime: string | null;
+  /** Last sync failure code: 'auth' | 'api_disabled' | 'scope_or_api' | 'network' | null. */
+  lastSyncError: string | null;
   tasbihStats: Record<string, TasbihDayStats>;
   lastBackupTime: string | null;
   theme?: 'dark' | 'light';
@@ -63,6 +65,7 @@ export const DEFAULT_STATE: AppState = {
   googleTokenExpiry: null,
   googleEmail: null,
   lastSyncTime: null,
+  lastSyncError: null,
   tasbihStats: {},
   lastBackupTime: null,
   theme: 'dark',
