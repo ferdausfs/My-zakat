@@ -14,6 +14,8 @@ export interface AppLocation {
   name: string;
   coords: [number, number];
   timezone: number;
+  /** IANA timezone name (e.g. 'Asia/Dhaka') — preferred over the fixed offset when available (handles DST). */
+  ianaTz?: string;
   method?: string;
 }
 
@@ -47,6 +49,7 @@ export const DEFAULT_STATE: AppState = {
     name: 'ঢাকা, বাংলাদেশ',
     coords: [23.8103, 90.4125],
     timezone: 6,
+    ianaTz: 'Asia/Dhaka',
     method: 'karachi',
   },
   pin: null,

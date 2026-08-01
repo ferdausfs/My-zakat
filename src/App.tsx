@@ -4,6 +4,7 @@ import { SalatPage } from './pages/SalatPage';
 import { TasbihPage } from './pages/TasbihPage';
 import { DuaPage } from './pages/DuaPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { PinGate } from './components/PinGate';
 import {
   loadState, saveState, DEFAULT_STATE,
   type AppState, type AppLocation, type SalatLogEntry
@@ -42,6 +43,7 @@ export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [page, setPage] = useState<Page>('zakat');
   const [toast, setToast] = useState<string | null>(null);
+  const [unlocked, setUnlocked] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useDebouncedSave(state);
@@ -124,6 +126,17 @@ export default function App() {
   // Ramadan banner
   const inRamadan = isRamadan();
   const ramadanInfo = ramadanDaysInfo();
+
+  // PIN lock — gate the entire app until the correct PIN is entered
+  if (state.pin && !unlocked) {
+    return (
+      <PinGate
+        expected={state.pin}
+        onUnlock={() => setUnlocked(true)}
+        onResetAll={() => { clearAll(); setUnlocked(true); }}
+      />
+    );
+  }
 
   return (
     <div className="app-container">

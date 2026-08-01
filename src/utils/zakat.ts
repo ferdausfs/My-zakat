@@ -1,7 +1,11 @@
+import { gregorianToHijri, formatHijriDate, LUNAR_YEAR_DAYS } from './hijri';
+
 export const ZAKAT_RATE = 0.025;
 export const GOLD_NISAB_GRAMS = 87.48;
 export const SILVER_NISAB_GRAMS = 612.36;
-export const LUNAR_YEAR_DAYS = 354;
+
+/** Single source of truth for the lunar-year length (defined in hijri.ts); integer day count for timeline math. */
+const LUNAR_DAYS_INT = Math.round(LUNAR_YEAR_DAYS);
 
 export type AssetType =
   | 'cash'
@@ -83,7 +87,7 @@ export interface ZakatBreakdown {
   hawl: HawlInfo;
 }
 
-function toBDT(val: number, type: AssetType, prices: Prices): number {
+export function toBDT(val: number, type: AssetType, prices: Prices): number {
   if (type === 'gold') return val * (prices.goldPerGram || 0);
   if (type === 'silver') return val * (prices.silverPerGram || 0);
   return val;
@@ -96,34 +100,8 @@ function toLocalDateStr(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-const HIJRI_MONTHS_SHORT = [
-  "মুহররম", "সফর", "রবিউল আউয়াল", "রবিউস সানি",
-  "জমাদিউল আউয়াল", "জমাদিউস সানি", "রজব", "শাবান",
-  "রমজান", "শাওয়াল", "জিলকদ", "জিলহজ"
-];
-
-function toHijri(g: Date): { y: number; m: number; d: number } {
-  const gd = g.getDate(), gm = g.getMonth() + 1, gy = g.getFullYear();
-  let y2 = gy, m2 = gm;
-  if (m2 < 3) { y2 -= 1; m2 += 12; }
-  const a = Math.floor(y2 / 100);
-  const b = 2 - a + Math.floor(a / 4);
-  const jd = Math.floor(365.25 * (y2 + 4716)) + Math.floor(30.6001 * (m2 + 1)) + gd + b - 1524.5;
-  let l = Math.floor(jd) - 1948440 + 10632;
-  const n = Math.floor((l - 1) / 10631);
-  l = l - 10631 * n + 354;
-  let j = (Math.floor((10985 - l) / 5316)) * (Math.floor((50 * l) / 17719)) +
-           (Math.floor(l / 5670)) * (Math.floor((43 * l) / 15238));
-  l = l - (Math.floor((30 - j) / 15)) * (Math.floor((17719 * j) / 50)) -
-      (Math.floor(j / 16)) * (Math.floor((15238 * j) / 43)) + 29;
-  const hm = Math.floor((24 * l) / 709);
-  const hd = l - Math.floor((709 * hm) / 24);
-  const hy = 30 * n + j - 30;
-  return { y: hy, m: hm, d: hd };
-}
-
-function fmtHijri(h: { y: number; m: number; d: number }): string {
-  return `${h.d} ${HIJRI_MONTHS_SHORT[h.m - 1]}, ${h.y} হিজরি`;
+function fmtHijriOf(dateStr: string): string {
+  return formatHijriDate(gregorianToHijri(new Date(dateStr + 'T12:00:00')));
 }
 
 function daysBetween(a: string, b: string): number {
@@ -218,7 +196,7 @@ export function calculateZakat(
   if (!hasValidPrices) {
     hawl = { ...hawl, status: 'no-prices' };
   } else if (hawlStart) {
-    const dueDate = addDays(hawlStart, LUNAR_YEAR_DAYS);
+    const dueDate = addDays(hawlStart, LUNAR_DAYS_INT);
     const daysLeft = daysBetween(todayStr, dueDate);
     const daysSinceStart = daysBetween(hawlStart, todayStr);
     hawl = {
@@ -227,19 +205,19 @@ export function calculateZakat(
       daysSinceStart,
       hawlStartDate: hawlStart,
       hawlDueDate: dueDate,
-      hawlStartHijri: fmtHijri(toHijri(new Date(hawlStart + 'T12:00:00'))),
-      hawlDueHijri: fmtHijri(toHijri(new Date(dueDate + 'T12:00:00'))),
+      hawlStartHijri: fmtHijriOf(hawlStart),
+      hawlDueHijri: fmtHijriOf(dueDate),
       timeline,
     };
   } else if (meetsNisab) {
     hawl = {
       status: 'awaiting',
-      daysLeft: LUNAR_YEAR_DAYS,
+      daysLeft: LUNAR_DAYS_INT,
       daysSinceStart: 0,
       hawlStartDate: todayStr,
-      hawlDueDate: addDays(todayStr, LUNAR_YEAR_DAYS),
-      hawlStartHijri: fmtHijri(toHijri(new Date())),
-      hawlDueHijri: fmtHijri(toHijri(new Date(addDays(todayStr, LUNAR_YEAR_DAYS) + 'T12:00:00'))),
+      hawlDueDate: addDays(todayStr, LUNAR_DAYS_INT),
+      hawlStartHijri: fmtHijriOf(todayStr),
+      hawlDueHijri: fmtHijriOf(addDays(todayStr, LUNAR_DAYS_INT)),
       timeline,
     };
   }

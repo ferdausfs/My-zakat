@@ -8,6 +8,9 @@ interface Props {
   showToast: (msg: string) => void;
 }
 
+/** Stable empty fallback so effects depending on `todayStats` don't loop. */
+const EMPTY_DAY: TasbihDayStats = {};
+
 export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
   const [activeDhikr, setActiveDhikr] = useState<DhikrPreset>(DHIKR_PRESETS[0]);
   const [customText, setCustomText] = useState('');
@@ -18,11 +21,11 @@ export function TasbihPage({ stats, onUpdateCount, showToast }: Props) {
   const [showStats, setShowStats] = useState(false);
   const tapRef = useRef<HTMLButtonElement>(null);
   const todayKey = getTodayKey();
-  const todayStats = stats[todayKey] || {};
+  const todayStats = stats[todayKey] || EMPTY_DAY;
 
   useEffect(() => {
     setCount(todayStats[activeDhikr.id] || 0);
-  }, [activeDhikr.id]);
+  }, [activeDhikr.id, todayStats]);
 
   useEffect(() => {
     const total = Object.values(todayStats).reduce((s, c) => s + c, 0);

@@ -296,7 +296,7 @@ export function SettingsPage({
           <i className="fas fa-lock text-amber-400" />পিন লক
         </p>
         <p className="text-xs text-gray-400 mb-3">
-          {state.pin ? '✅ পিন সেট আছে' : 'অ্যাপ লক করুন (আসছে শীঘ্রই)'}
+          {state.pin ? '✅ পিন সেট আছে — অ্যাপ খোলার সময় পিন চাইবে' : 'অ্যাপ খোলার সময় পিন চাইবে'}
         </p>
         <button onClick={() => setPinModal(true)} className="btn btn-secondary text-sm">
           <i className="fas fa-key" />{state.pin ? 'পিন পরিবর্তন' : 'পিন সেট করুন'}

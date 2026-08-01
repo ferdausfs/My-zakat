@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '../components/Modal';
 import { gregorianToHijri, formatHijriDate, getAdjustedDateForHijri } from '../utils/hijri';
 import {
-  ASSET_META, LIABILITY_META, calculateZakat, fmtBDT, fmtBDT2,
+  ASSET_META, LIABILITY_META, calculateZakat, fmtBDT, fmtBDT2, toBDT,
   GOLD_NISAB_GRAMS, SILVER_NISAB_GRAMS,
   type Asset, type AssetType, type Liability, type LiabilityType, type NisabStandard, type Prices, ZAKAT_RATE
 } from '../utils/zakat';
@@ -462,7 +462,7 @@ export function ZakatPage(p: Props) {
               )}
               {assets.map(a => {
                 const m = ASSET_META[a.type];
-                const bdt = a.type === 'gold' ? a.value * prices.goldPerGram : a.type === 'silver' ? a.value * prices.silverPerGram : a.value;
+                const bdt = toBDT(a.value, a.type, prices);
                 return (
                   <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl ${m.bg} border border-white/5`}>
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 bg-black/20`}>

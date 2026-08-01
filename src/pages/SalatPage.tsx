@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '../components/Modal';
 import { gregorianToHijri, formatHijriDate, getAdjustedDateForHijri } from '../utils/hijri';
 import {
   calcPrayerTimes, PRAYER_NAMES_BN, LOGGABLE_PRAYERS, POPULAR_LOCATIONS,
+  getZoneOffsetHours, nowInOffset,
   type PrayerKey, type PrayerTimes
 } from '../utils/prayerTimes';
 import type { AppLocation, SalatLogEntry } from '../utils/storage';
@@ -32,28 +33,29 @@ function parseTime24(t: string): number {
   return h * 60 + m;
 }
 
-function getNextPrayer(times: PrayerTimes): string {
-  const now = new Date();
-  const currentMins = now.getHours() * 60 + now.getMinutes();
-  const order = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
-  for (const k of order) {
-    const raw = (times as unknown as Record<string, string>)[k];
-    if (!raw || raw === '--:--') continue;
-    const t = parseTime24(raw);
-    if (t > currentMins) return k;
-  }
-  return 'fajr';
+/** Small accessor to avoid repeating the index-cast for PrayerTimes. */
+function timeAt(times: PrayerTimes, k: string): string {
+  return (times as unknown as Record<string, string>)[k];
 }
 
-function getCurrentPrayer(times: PrayerTimes): string {
-  const now = new Date();
-  const currentMins = now.getHours() * 60 + now.getMinutes();
+/** `nowMins` = minutes-since-midnight in the *city's* clock (see SalatPage). */
+function getNextPrayer(times: PrayerTimes, nowMins: number): string {
+  const order = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+  for (const k of order) {
+    const raw = timeAt(times, k);
+    if (!raw || raw === '--:--') continue;
+    if (parseTime24(raw) > nowMins) return k;
+  }
+  return 'fajr'; // past isha → tomorrow's fajr
+}
+
+function getCurrentPrayer(times: PrayerTimes, nowMins: number): string {
   const order = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'];
   let current = order[0];
   for (const k of order) {
-    const raw = (times as unknown as Record<string, string>)[k];
+    const raw = timeAt(times, k);
     if (!raw || raw === '--:--') continue;
-    if (parseTime24(raw) <= currentMins) current = k;
+    if (parseTime24(raw) <= nowMins) current = k;
   }
   return current;
 }
@@ -218,41 +220,47 @@ export function SalatPage({ location, salatLog, onUpdateLog, onChangeLocation, s
     return () => clearInterval(t);
   }, []);
 
-  const today = useMemo(() => new Date(), []);
-  const todayKey = useMemo(() => formatDateKey(today), [today]);
-  const hijriToday = useMemo(() => gregorianToHijri(getAdjustedDateForHijri(today)), [today]);
+  // Effective UTC offset for the chosen city. When the location carries an IANA
+  // zone we derive it per instant (handles DST); otherwise use the stored offset.
+  const tzHours = useMemo(() => {
+    const fromZone = location.ianaTz ? getZoneOffsetHours(location.ianaTz, currentTime) : null;
+    return fromZone ?? location.timezone;
+  }, [location, currentTime]);
+
+  // "Now" expressed in the city's own clock. The prayer table, next/current
+  // prayer, countdown, Hijri date and the salat-log day key are ALL derived
+  // from this single frame — so the device's timezone no longer affects results.
+  const cityNow = useMemo(() => nowInOffset(tzHours, currentTime), [tzHours, currentTime]);
+
+  const todayKey = useMemo(() => formatDateKey(cityNow.date), [cityNow]);
+  const hijriToday = useMemo(() => gregorianToHijri(getAdjustedDateForHijri(cityNow.date)), [cityNow]);
 
   const times = useMemo(() => calcPrayerTimes(
-    today,
+    cityNow.date,
     location.coords[0],
     location.coords[1],
-    location.timezone,
+    tzHours,
     location.method || 'karachi',
-  ), [today, location]);
+  ), [cityNow, location, tzHours]);
 
   const prayerKeys = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
-  const nextKey = useMemo(() => getNextPrayer(times.raw), [times]);
-  const currentKey = useMemo(() => getCurrentPrayer(times.raw), [times]);
+  const nextKey = useMemo(() => getNextPrayer(times.raw, cityNow.minutes), [times, cityNow]);
+  const currentKey = useMemo(() => getCurrentPrayer(times.raw, cityNow.minutes), [times, cityNow]);
 
   const todayLog = useMemo(() => salatLog[todayKey] || {}, [salatLog, todayKey]);
   const performedCount = LOGGABLE_PRAYERS.filter(k => todayLog[k]?.performed).length;
   const jamaatCount = LOGGABLE_PRAYERS.filter(k => todayLog[k]?.jamaat).length;
 
-  // Next prayer time countdown
-  const nextTimeRaw = (times.raw as unknown as Record<string, string>)[nextKey];
+  // Next prayer countdown — computed entirely in the city's minute frame.
+  const nextTimeRaw = timeAt(times.raw, nextKey);
   const nextPrayerCountdown = useMemo(() => {
     if (!nextTimeRaw || nextTimeRaw === '--:--') return '';
-    const [h, m] = nextTimeRaw.split(':').map(Number);
-    const now = currentTime;
-    const prayerDate = new Date(now);
-    prayerDate.setHours(h, m, 0, 0);
-    if (prayerDate < now) prayerDate.setDate(prayerDate.getDate() + 1);
-    const diff = prayerDate.getTime() - now.getTime();
-    const hrs = Math.floor(diff / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    if (hrs > 0) return `${hrs}ঘ ${mins}মি`;
-    return `${mins} মিনিট`;
-  }, [nextTimeRaw, currentTime]);
+    const diffMins = (((parseTime24(nextTimeRaw) - cityNow.minutes) % 1440) + 1440) % 1440;
+    const hrs = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    if (hrs > 0) return `${hrs.toLocaleString('bn-BD')}ঘ ${mins.toLocaleString('bn-BD')}মি`;
+    return `${mins.toLocaleString('bn-BD')} মিনিট`;
+  }, [nextTimeRaw, cityNow]);
 
   // Qibla
   const qiblaBearing = useMemo(() => {
@@ -274,23 +282,45 @@ export function SalatPage({ location, salatLog, onUpdateLog, onChangeLocation, s
     return dirs[Math.round(qiblaBearing / 45) % 8];
   }, [qiblaBearing]);
 
-  const handleCompass = useCallback(() => {
-    setShowQibla(v => !v);
-    const DeviceOrientationEvent = (window as unknown as Record<string, unknown>)['DeviceOrientationEvent'] as { requestPermission?: () => Promise<string> } | undefined;
-    if (DeviceOrientationEvent?.requestPermission) {
-      DeviceOrientationEvent.requestPermission().then(state => {
-        if (state === 'granted') {
-          window.addEventListener('deviceorientation', (e: DeviceOrientationEvent) => {
-            if (e.alpha !== null) setCompassHeading(e.alpha);
-          });
-        }
-      }).catch(() => {});
-    } else {
-      window.addEventListener('deviceorientation', (e: DeviceOrientationEvent) => {
-        if (e.alpha !== null) setCompassHeading(e.alpha);
-      }, { once: false });
+  const compassHandler = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
+
+  const stopCompass = useCallback(() => {
+    if (compassHandler.current) {
+      window.removeEventListener('deviceorientation', compassHandler.current);
+      compassHandler.current = null;
     }
+    setCompassHeading(null);
   }, []);
+
+  // Make sure the listener is detached if the page unmounts while active.
+  useEffect(() => () => stopCompass(), [stopCompass]);
+
+  const handleCompass = useCallback(() => {
+    if (showQibla) {
+      stopCompass();
+      setShowQibla(false);
+      return;
+    }
+    setShowQibla(true);
+    const DOE = (window as unknown as Record<string, unknown>)['DeviceOrientationEvent'] as
+      { requestPermission?: () => Promise<string> } | undefined;
+    const attach = () => {
+      if (compassHandler.current) return;
+      const handler = (e: DeviceOrientationEvent) => {
+        // iOS gives a true-north heading directly; elsewhere fall back to alpha.
+        const wk = (e as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
+        const heading = (typeof wk === 'number' && !isNaN(wk)) ? wk : e.alpha;
+        if (heading !== null) setCompassHeading(((Math.round(heading) % 360) + 360) % 360);
+      };
+      compassHandler.current = handler;
+      window.addEventListener('deviceorientation', handler);
+    };
+    if (DOE?.requestPermission) {
+      DOE.requestPermission().then(s => { if (s === 'granted') attach(); }).catch(() => {});
+    } else {
+      attach();
+    }
+  }, [showQibla, stopCompass]);
 
   return (
     <div className="px-4 pt-5 space-y-4 page-enter">
@@ -316,7 +346,7 @@ export function SalatPage({ location, salatLog, onUpdateLog, onChangeLocation, s
             <div>
               <p className="text-xs text-gray-400 mb-1">পরবর্তী ওয়াক্ত</p>
               <p className="text-2xl font-extrabold" style={{ color: 'var(--primary)' }}>{PRAYER_NAMES_BN[nextKey]}</p>
-              <p className="text-lg font-bold text-white mt-1">{(times.formatted as unknown as Record<string, string>)[nextKey]}</p>
+              <p className="text-lg font-bold text-white mt-1">{timeAt(times.formatted, nextKey)}</p>
               {nextPrayerCountdown && (
                 <p className="text-xs text-gray-400 mt-1">
                   <i className="fas fa-clock mr-1" />আর {nextPrayerCountdown} পরে
@@ -428,7 +458,7 @@ export function SalatPage({ location, salatLog, onUpdateLog, onChangeLocation, s
                     <p className={`font-semibold text-sm ${isCurrent ? 'text-indigo-300' : ''}`}>{PRAYER_NAMES_BN[k]}</p>
                     {isNext && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">পরবর্তী</span>}
                   </div>
-                  <p className="text-xs text-gray-400 tabular-nums">{(times.formatted as unknown as Record<string, string>)[k]}</p>
+                  <p className="text-xs text-gray-400 tabular-nums">{timeAt(times.formatted, k)}</p>
                 </div>
                 {isLoggable && (
                   <div className="flex items-center gap-1 flex-shrink-0">
