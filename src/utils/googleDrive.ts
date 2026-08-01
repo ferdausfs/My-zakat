@@ -1,12 +1,41 @@
+/**
+ * Google অটো-সিঙ্ক ইঞ্জিন
+ * ──────────────────────
+ * ব্যবহারকারী শুধু "Google দিয়ে সাইন ইন" চাপে — Client ID অ্যাপের ভেতরে
+ * বিল্ট-ইন (src/config.ts)। ডেটা ব্যবহারকারীর নিজের Google Drive-এ একটি
+ * JSON ফাইলে সেভ হয়; টোকেনের মেয়াদ শেষ হলে নীরবে রিফ্রেশ হয়।
+ */
+import { GOOGLE_CLIENT_ID } from '../config';
+
 const GIS_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const BACKUP_FILE_NAME = 'amar_zakat_app_backup.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+/** Treat tokens as expired this much before their real expiry (clock skew buffer). */
+const EXPIRY_BUFFER_MS = 60_000;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type GisWindow = any;
+
+export interface TokenResult {
+  token: string;
+  /** epoch ms when the token expires (buffer already applied) */
+  expiresAt: number;
+}
+
+export interface GoogleUser {
+  email: string;
+  name: string;
+  photo?: string;
+}
 
 let gisLoaded = false;
-let accessToken: string | null = null;
-let tokenClient: unknown = null;
+let tokenClient: { requestAccessToken: (opts?: { prompt?: string }) => void } | null = null;
+let pendingToken: {
+  resolve: (r: TokenResult) => void;
+  reject: (e: Error) => void;
+} | null = null;
 
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -14,7 +43,7 @@ function loadScript(src: string): Promise<void> {
     const script = document.createElement('script');
     script.src = src; script.async = true; script.defer = true;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onerror = () => reject(new Error('Google Identity Services লোড হয়নি (ইন্টারনেট আছে?)'));
     document.head.appendChild(script);
   });
 }
@@ -25,72 +54,122 @@ export async function loadGoogleIdentity(): Promise<void> {
   gisLoaded = true;
 }
 
-export function isGoogleLoaded(): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return gisLoaded && typeof (window as any)['google'] !== 'undefined';
-}
-
-export async function signInWithGoogle(clientId: string): Promise<string> {
+async function getTokenClient() {
   await loadGoogleIdentity();
-  return new Promise((resolve, reject) => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const g = (window as any)['google'] as Record<string, unknown>;
-      const accounts = g['accounts'] as Record<string, unknown>;
-      const oauth2 = accounts['oauth2'] as Record<string, unknown>;
-      tokenClient = (oauth2['initTokenClient'] as Function)({
-        client_id: clientId,
-        scope: SCOPES,
-        callback: (resp: Record<string, string>) => {
-          if (resp['error']) { reject(new Error(resp['error'])); return; }
-          accessToken = resp['access_token'];
-          resolve(resp['access_token']);
-        },
-        error_callback: (err: Record<string, string>) => {
-          reject(new Error(err['message'] || 'Google sign-in failed'));
-        },
+  if (tokenClient) return tokenClient;
+  const g = (window as unknown as GisWindow).google;
+  const client = g.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp: Record<string, unknown>) => {
+      const pending = pendingToken;
+      pendingToken = null;
+      if (!pending) return;
+      if (resp['error'] || !resp['access_token']) {
+        pending.reject(new Error(String(resp['error'] || 'no_token')));
+        return;
+      }
+      const expiresInSec = Number(resp['expires_in'] ?? 3599);
+      pending.resolve({
+        token: String(resp['access_token']),
+        expiresAt: Date.now() + expiresInSec * 1000 - EXPIRY_BUFFER_MS,
       });
-      (tokenClient as Record<string, Function>)['requestAccessToken']();
-    } catch (err) { reject(err); }
+    },
+    error_callback: (err: Record<string, unknown>) => {
+      const pending = pendingToken;
+      pendingToken = null;
+      pending?.reject(new Error(String(err['type'] || err['message'] || 'popup_failed')));
+    },
   });
+  tokenClient = client;
+  return client;
 }
 
-export function signOut(): void {
-  if (accessToken) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const g = (window as any)['google'] as Record<string, unknown> | undefined;
-    if (g) {
-      const accounts = g['accounts'] as Record<string, unknown>;
-      const oauth2 = accounts?.['oauth2'] as Record<string, Function> | undefined;
-      oauth2?.['revoke']?.(accessToken);
-    }
+/**
+ * Request a token. `prompt: ''` stays silent when the user already consented;
+ * `prompt: 'consent'` shows the Google account chooser/consent screen.
+ */
+async function requestToken(prompt: '' | 'consent'): Promise<TokenResult> {
+  if (pendingToken) throw new Error('token_request_in_progress');
+  const client = await getTokenClient();
+  const result = new Promise<TokenResult>((resolve, reject) => {
+    pendingToken = { resolve, reject };
+  });
+  client.requestAccessToken({ prompt });
+  return result;
+}
+
+/**
+ * Interactive sign-in. Tries silently first (returning user), falls back to
+ * the consent popup for first-time users.
+ */
+export async function signInWithGoogle(): Promise<TokenResult & { user: GoogleUser | null }> {
+  let tr: TokenResult;
+  try {
+    tr = await requestToken('');
+  } catch {
+    tr = await requestToken('consent');
   }
-  accessToken = null;
+  const user = await fetchGoogleUser(tr.token).catch(() => null);
+  return { ...tr, user };
 }
 
-export function getAccessToken(): string | null { return accessToken; }
-export function setAccessToken(token: string | null): void { accessToken = token; }
+/**
+ * Silent refresh — call when the saved token is missing/near expiry.
+ * Rejects if Google needs the user to interact again.
+ */
+export async function silentRefreshToken(): Promise<TokenResult> {
+  return requestToken('');
+}
 
-async function findBackupFile(token: string): Promise<string | null> {
+/** True while the saved token is still comfortably valid. */
+export function isTokenValid(savedToken: string | null, expiresAt: number | null): boolean {
+  return !!savedToken && !!expiresAt && Date.now() < expiresAt;
+}
+
+export function revokeGoogleToken(token: string | null): void {
+  if (!token) return;
+  try {
+    const g = (window as unknown as GisWindow).google;
+    g?.accounts?.oauth2?.revoke?.(token, () => {});
+  } catch { /* ignore */ }
+}
+
+export async function fetchGoogleUser(token: string): Promise<GoogleUser | null> {
+  const res = await fetch(`${DRIVE_API_BASE}/about?fields=user`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('about_failed');
+  const data = await res.json();
+  if (!data?.user?.emailAddress) return null;
+  return {
+    email: data.user.emailAddress,
+    name: data.user.displayName || data.user.emailAddress,
+    photo: data.user.photoLink,
+  };
+}
+
+async function findBackupFile(token: string): Promise<{ id: string; modifiedTime?: string } | null> {
   const q = encodeURIComponent(`name='${BACKUP_FILE_NAME}' and trashed=false`);
   const res = await fetch(`${DRIVE_API_BASE}/files?q=${q}&fields=files(id,name,modifiedTime)`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('Failed to search Google Drive');
+  if (!res.ok) throw new Error('drive_search_failed');
   const data = await res.json();
-  return data.files?.[0]?.id || null;
+  const f = data.files?.[0];
+  return f ? { id: f.id, modifiedTime: f.modifiedTime } : null;
 }
 
 export async function backupToGoogleDrive(token: string, content: string): Promise<{ fileId: string; isNew: boolean }> {
-  const existingId = await findBackupFile(token);
-  if (existingId) {
-    const res = await fetch(`${DRIVE_UPLOAD_BASE}/files/${existingId}?uploadType=media`, {
+  const existing = await findBackupFile(token);
+  if (existing) {
+    const res = await fetch(`${DRIVE_UPLOAD_BASE}/files/${existing.id}?uploadType=media`, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: content,
     });
-    if (!res.ok) throw new Error('Failed to update backup on Google Drive');
-    return { fileId: existingId, isNew: false };
+    if (!res.ok) throw new Error('drive_update_failed');
+    return { fileId: existing.id, isNew: false };
   }
   const metadata = JSON.stringify({ name: BACKUP_FILE_NAME, mimeType: 'application/json' });
   const form = new FormData();
@@ -101,28 +180,23 @@ export async function backupToGoogleDrive(token: string, content: string): Promi
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   });
-  if (!res.ok) throw new Error('Failed to upload backup to Google Drive');
+  if (!res.ok) throw new Error('drive_upload_failed');
   const data = await res.json();
   return { fileId: data.id, isNew: true };
 }
 
 export async function restoreFromGoogleDrive(token: string): Promise<string | null> {
-  const fileId = await findBackupFile(token);
-  if (!fileId) return null;
-  const res = await fetch(`${DRIVE_API_BASE}/files/${fileId}?alt=media`, {
+  const file = await findBackupFile(token);
+  if (!file) return null;
+  const res = await fetch(`${DRIVE_API_BASE}/files/${file.id}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('Failed to download backup from Google Drive');
+  if (!res.ok) throw new Error('drive_download_failed');
   return res.text();
 }
 
 export async function getBackupInfo(token: string): Promise<{ exists: boolean; modifiedTime?: string }> {
-  const fileId = await findBackupFile(token);
-  if (!fileId) return { exists: false };
-  const res = await fetch(`${DRIVE_API_BASE}/files/${fileId}?fields=modifiedTime`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return { exists: true };
-  const data = await res.json();
-  return { exists: true, modifiedTime: data.modifiedTime };
+  const file = await findBackupFile(token);
+  if (!file) return { exists: false };
+  return { exists: true, modifiedTime: file.modifiedTime };
 }

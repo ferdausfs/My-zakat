@@ -15,8 +15,10 @@ with prayer times, **Qibla** compass, **Tasbih** counter, and a **Dua** collecti
 - **কিবলা** — bearing + device-orientation compass.
 - **তাসবীহ** — dhikr presets with targets, daily counts, vibration feedback.
 - **দোয়া** — curated dua collection with Arabic, transliteration and Bengali.
-- **ডেটা** — everything stored in `localStorage`; export/import JSON backups,
-  optional Google Drive backup, optional PIN lock.
+- **ডেটা** — everything stored in `localStorage`, plus **optional Google sign-in
+  with automatic cloud sync** (data lives in the *user's own* Google Drive —
+  no server, no owner access). Export/import JSON backups and PIN lock too.
+  Owner setup for the built-in Google login: **[GOOGLE_SETUP.md](./GOOGLE_SETUP.md)**.
 
 ## 🛠 Tech
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ZakatPage } from './pages/ZakatPage';
 import { SalatPage } from './pages/SalatPage';
 import { TasbihPage } from './pages/TasbihPage';
@@ -6,12 +6,16 @@ import { DuaPage } from './pages/DuaPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { PinGate } from './components/PinGate';
 import {
-  loadState, saveState, DEFAULT_STATE,
+  loadState, saveState, DEFAULT_STATE, normalizeState,
   type AppState, type AppLocation, type SalatLogEntry
 } from './utils/storage';
 import { type Asset, type Liability, type NisabStandard, type Prices } from './utils/zakat';
 import type { PrayerKey } from './utils/prayerTimes';
-import { setAccessToken } from './utils/googleDrive';
+import {
+  backupToGoogleDrive, restoreFromGoogleDrive, getBackupInfo,
+  isTokenValid, silentRefreshToken
+} from './utils/googleDrive';
+import { GOOGLE_SYNC_ENABLED } from './config';
 import { isRamadan, ramadanDaysInfo } from './utils/hijri';
 
 type Page = 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
@@ -48,14 +52,116 @@ export default function App() {
 
   useDebouncedSave(state);
 
-  useEffect(() => {
-    if (state.googleAccessToken) setAccessToken(state.googleAccessToken);
-  }, [state.googleAccessToken]);
-
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  // ─── Google auto-sync engine ───
+  // Latest-state ref so async sync logic always reads fresh data.
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  const syncingRef = useRef(false);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(false);
+
+  /** Signature of the data that should trigger a cloud sync when it changes. */
+  const contentKey = useMemo(() => JSON.stringify({
+    a: state.assets, l: state.liabilities, p: state.prices, n: state.nisabStandard,
+    s: state.salatLog, loc: state.location, t: state.tasbihStats, pin: state.pin,
+  }), [state.assets, state.liabilities, state.prices, state.nisabStandard,
+       state.salatLog, state.location, state.tasbihStats, state.pin]);
+
+  /** Get a usable access token, silently refreshing when near expiry (B6). */
+  const ensureFreshToken = useCallback(async (): Promise<string> => {
+    const s = stateRef.current;
+    if (isTokenValid(s.googleAccessToken, s.googleTokenExpiry)) return s.googleAccessToken as string;
+    const tr = await silentRefreshToken(); // throws → caller marks signed-out
+    setState(prev => ({ ...prev, googleAccessToken: tr.token, googleTokenExpiry: tr.expiresAt }));
+    return tr.token;
+  }, []);
+
+  /** Push current state to the signed-in user's Google Drive. */
+  const pushToDrive = useCallback(async (): Promise<boolean> => {
+    if (!GOOGLE_SYNC_ENABLED || syncingRef.current) return false;
+    if (!stateRef.current.googleAccessToken) return false;
+    syncingRef.current = true;
+    try {
+      const token = await ensureFreshToken();
+      await backupToGoogleDrive(token, JSON.stringify(stateRef.current));
+      setState(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
+      return true;
+    } catch {
+      // Sync/refresh failed → mark signed out so the user re-logs next time
+      setState(prev => (prev.googleAccessToken
+        ? { ...prev, googleAccessToken: null, googleTokenExpiry: null }
+        : prev));
+      return false;
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [ensureFreshToken]);
+
+  /** Pull from Drive when the remote copy is newer than our last sync. */
+  const pullFromDrive = useCallback(async (force = false): Promise<boolean> => {
+    if (!GOOGLE_SYNC_ENABLED || !stateRef.current.googleAccessToken) return false;
+    try {
+      const token = await ensureFreshToken();
+      const info = await getBackupInfo(token);
+      if (!info.exists) return false;
+      const localSync = stateRef.current.lastSyncTime;
+      const remoteNewer = info.modifiedTime && new Date(info.modifiedTime).getTime() > new Date(localSync || 0).getTime() + 5000;
+      if (!force && !remoteNewer) return false;
+      const content = await restoreFromGoogleDrive(token);
+      if (!content) return false;
+      const parsed = JSON.parse(content);
+      // Never inherit auth credentials from the pulled copy
+      const remote = normalizeState(parsed);
+      setState(prev => ({
+        ...remote,
+        googleAccessToken: prev.googleAccessToken,
+        googleTokenExpiry: prev.googleTokenExpiry,
+        googleEmail: prev.googleEmail,
+        lastSyncTime: new Date().toISOString(),
+      }));
+      showToast('☁️ Google Drive থেকে সর্বশেষ ডেটা এসেছে');
+      return true;
+    } catch {
+      return false; // offline / remote unreadable — stay on local data
+    }
+  }, [ensureFreshToken, showToast]);
+
+  // Auto-push: 3s after any real content change while signed in.
+  useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; } // skip first render (bootstrap handles it)
+    if (!state.googleAccessToken) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => { pushToDrive(); }, 3000);
+    return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };
+  }, [contentKey, state.googleAccessToken, pushToDrive]);
+
+  // Bootstrap: on app start, if we have a saved session → pull if remote is newer.
+  const bootstrappedRef = useRef(false);
+  useEffect(() => {
+    if (bootstrappedRef.current) return;
+    bootstrappedRef.current = true;
+    if (stateRef.current.googleAccessToken) { pullFromDrive(); }
+  }, [pullFromDrive]);
+
+  // Called by Settings after an interactive Google sign-in.
+  const handleGoogleSignedIn = useCallback((auth: { token: string; expiresAt: number; email: string | null }) => {
+    setState(s => ({ ...s, googleAccessToken: auth.token, googleTokenExpiry: auth.expiresAt, googleEmail: auth.email }));
+    // After the state settles, pull newer remote data (fresh device → gets its data back)
+    setTimeout(() => {
+      pullFromDrive().then(pulled => {
+        if (!pulled) showToast('সাইন ইন সফল ✅ ডেটা অটো-সিঙ্ক চালু');
+      });
+    }, 50);
+  }, [pullFromDrive, showToast]);
+
+  const handleGoogleSignedOut = useCallback(() => {
+    setState(s => ({ ...s, googleAccessToken: null, googleTokenExpiry: null, googleEmail: null }));
   }, []);
 
   // ─── Asset callbacks ───
@@ -117,11 +223,20 @@ export default function App() {
   }, []);
 
   const setPin = useCallback((pin: string) => setState(s => ({ ...s, pin: pin || null })), []);
-  const importState = useCallback((newState: AppState) => setState({ ...DEFAULT_STATE, ...newState }), []);
-  const clearAll = useCallback(() => setState(DEFAULT_STATE), []);
-  const setGoogleClientId = useCallback((clientId: string | null) => setState(s => ({ ...s, googleClientId: clientId })), []);
-  const setGoogleAccessToken = useCallback((token: string | null) => setState(s => ({ ...s, googleAccessToken: token })), []);
-  const setLastBackupTime = useCallback((time: string) => setState(s => ({ ...s, lastBackupTime: time })), []);
+  const importState = useCallback((newState: AppState) =>
+    setState(prev => ({
+      ...normalizeState(newState as unknown as Record<string, unknown>),
+      // keep the current session's Google auth — restore files may predate it
+      googleAccessToken: prev.googleAccessToken,
+      googleTokenExpiry: prev.googleTokenExpiry,
+      googleEmail: prev.googleEmail,
+    })), []);
+  const clearAll = useCallback(() => setState(s => ({
+    ...DEFAULT_STATE,
+    googleAccessToken: s.googleAccessToken,
+    googleTokenExpiry: s.googleTokenExpiry,
+    googleEmail: s.googleEmail,
+  })), []);
 
   // Ramadan banner
   const inRamadan = isRamadan();
@@ -207,9 +322,10 @@ export default function App() {
           onImport={importState}
           onClearAll={clearAll}
           onSetPin={setPin}
-          onSetGoogleClientId={setGoogleClientId}
-          onSetGoogleAccessToken={setGoogleAccessToken}
-          onSetLastBackupTime={setLastBackupTime}
+          onGoogleSignedIn={handleGoogleSignedIn}
+          onGoogleSignedOut={handleGoogleSignedOut}
+          onSyncNow={pushToDrive}
+          onPullNow={pullFromDrive}
           showToast={showToast}
         />
       )}

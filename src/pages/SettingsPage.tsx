@@ -1,41 +1,40 @@
 import { useCallback, useState } from 'react';
 import { Modal } from '../components/Modal';
 import type { AppState } from '../utils/storage';
-import { DEFAULT_STATE } from '../utils/storage';
-import {
-  backupToGoogleDrive, restoreFromGoogleDrive, signInWithGoogle, signOut, getBackupInfo
-} from '../utils/googleDrive';
+import { signInWithGoogle, revokeGoogleToken } from '../utils/googleDrive';
+import { GOOGLE_SYNC_ENABLED } from '../config';
 
 interface Props {
   state: AppState;
   onImport: (s: AppState) => void;
   onClearAll: () => void;
   onSetPin: (pin: string) => void;
-  onSetGoogleClientId: (id: string | null) => void;
-  onSetGoogleAccessToken: (token: string | null) => void;
-  onSetLastBackupTime: (time: string) => void;
+  onGoogleSignedIn: (auth: { token: string; expiresAt: number; email: string | null }) => void;
+  onGoogleSignedOut: () => void;
+  onSyncNow: () => Promise<boolean>;
+  onPullNow: (force?: boolean) => Promise<boolean>;
   showToast: (msg: string) => void;
 }
 
 export function SettingsPage({
-  state, onImport, onClearAll, onSetPin, onSetGoogleClientId,
-  onSetGoogleAccessToken, onSetLastBackupTime, showToast
+  state, onImport, onClearAll, onSetPin,
+  onGoogleSignedIn, onGoogleSignedOut, onSyncNow, onPullNow, showToast
 }: Props) {
   const [clearConfirm, setClearConfirm] = useState(false);
   const [pinModal, setPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
-  const [googleClientIdInput, setGoogleClientIdInput] = useState(state.googleClientId || '');
-  const [driveLoading, setDriveLoading] = useState(false);
+  const [syncBusy, setSyncBusy] = useState<'signin' | 'sync' | 'pull' | null>(null);
   const [showPasteRestore, setShowPasteRestore] = useState(false);
   const [pasteText, setPasteText] = useState('');
-  const [driveInfo, setDriveInfo] = useState<{ exists: boolean; modifiedTime?: string } | null>(null);
+  const [pullConfirm, setPullConfirm] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
 
   const jsonStr = JSON.stringify(state, null, 2);
   const assetCount = state.assets.length;
   const liabCount = state.liabilities.length;
   const salatDays = Object.keys(state.salatLog).length;
+  const signedIn = !!state.googleAccessToken;
 
   // ─── Local backup ───
   const handleDownloadBackup = useCallback(() => {
@@ -62,7 +61,7 @@ export function SettingsPage({
     reader.onload = ev => {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
-        onImport({ ...DEFAULT_STATE, ...parsed });
+        onImport(parsed); // App normalizes via normalizeState
         showToast('ডেটা রিস্টোর হয়েছে ✅');
       } catch {
         showToast('ফাইল পড়তে পারিনি ❌');
@@ -75,7 +74,7 @@ export function SettingsPage({
   const handlePasteRestore = useCallback(() => {
     try {
       const parsed = JSON.parse(pasteText);
-      onImport({ ...DEFAULT_STATE, ...parsed });
+      onImport(parsed); // App normalizes via normalizeState
       showToast('ডেটা রিস্টোর হয়েছে ✅');
       setShowPasteRestore(false);
       setPasteText('');
@@ -84,74 +83,42 @@ export function SettingsPage({
     }
   }, [pasteText, onImport, showToast]);
 
-  // ─── Google Drive ───
-  const handleGoogleBackup = useCallback(async () => {
-    if (!state.googleClientId) return showToast('আগে Client ID দিন');
-    setDriveLoading(true);
+  // ─── Google সাইন-ইন / অটো-সিঙ্ক ───
+  const handleSignIn = useCallback(async () => {
+    setSyncBusy('signin');
     try {
-      let token = state.googleAccessToken;
-      if (!token) {
-        token = await signInWithGoogle(state.googleClientId);
-        onSetGoogleAccessToken(token);
-      }
-      const result = await backupToGoogleDrive(token, jsonStr);
-      const now = new Date().toISOString();
-      onSetLastBackupTime(now);
-      showToast(result.isNew ? 'Google Drive-এ নতুন ব্যাকআপ হয়েছে ✅' : 'Google Drive-এ ব্যাকআপ আপডেট হয়েছে ✅');
+      const res = await signInWithGoogle();   // বিল্ট-ইন Client ID দিয়ে
+      onGoogleSignedIn({ token: res.token, expiresAt: res.expiresAt, email: res.user?.email || null });
+      // সফল টোস্ট App দেখায় (pull ফলাফল অনুযায়ী)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'অজানা ত্রুটি';
-      if (msg.includes('popup')) {
-        showToast('পপআপ ব্লক। আবার চেষ্টা করুন।');
-      } else {
-        showToast(`Google Drive ব্যাকআপ ব্যর্থ: ${msg.slice(0, 40)}`);
-        onSetGoogleAccessToken(null);
-      }
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('popup')) showToast('পপআপ ব্লক হয়েছে — পপআপ অনুমতি দিয়ে আবার চেষ্টা করুন');
+      else showToast('সাইন ইন হয়নি — ইন্টারনেট দেখে আবার চেষ্টা করুন');
     } finally {
-      setDriveLoading(false);
+      setSyncBusy(null);
     }
-  }, [state, jsonStr, onSetGoogleAccessToken, onSetLastBackupTime, showToast]);
+  }, [onGoogleSignedIn, showToast]);
 
-  const handleGoogleRestore = useCallback(async () => {
-    if (!state.googleClientId) return showToast('আগে Client ID দিন');
-    setDriveLoading(true);
-    try {
-      let token = state.googleAccessToken;
-      if (!token) {
-        token = await signInWithGoogle(state.googleClientId);
-        onSetGoogleAccessToken(token);
-      }
-      const content = await restoreFromGoogleDrive(token);
-      if (!content) return showToast('Google Drive-এ কোনো ব্যাকআপ নেই');
-      const parsed = JSON.parse(content);
-      onImport({ ...DEFAULT_STATE, ...parsed });
-      showToast('Google Drive থেকে রিস্টোর হয়েছে ✅');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'অজানা ত্রুটি';
-      showToast(`রিস্টোর ব্যর্থ: ${msg.slice(0, 40)}`);
-      onSetGoogleAccessToken(null);
-    } finally {
-      setDriveLoading(false);
-    }
-  }, [state, onSetGoogleAccessToken, onImport, showToast]);
+  const handleSignOut = useCallback(() => {
+    revokeGoogleToken(state.googleAccessToken);
+    onGoogleSignedOut();
+    showToast('Google সাইন আউট হয়েছে');
+  }, [state.googleAccessToken, onGoogleSignedOut, showToast]);
 
-  const handleCheckDrive = useCallback(async () => {
-    if (!state.googleClientId) return showToast('আগে Client ID দিন');
-    setDriveLoading(true);
-    try {
-      let token = state.googleAccessToken;
-      if (!token) {
-        token = await signInWithGoogle(state.googleClientId);
-        onSetGoogleAccessToken(token);
-      }
-      const info = await getBackupInfo(token);
-      setDriveInfo(info);
-    } catch {
-      showToast('Drive চেক করতে পারিনি');
-      onSetGoogleAccessToken(null);
-    } finally {
-      setDriveLoading(false);
-    }
-  }, [state, onSetGoogleAccessToken, showToast]);
+  const handleSyncNow = useCallback(async () => {
+    setSyncBusy('sync');
+    const ok = await onSyncNow();
+    setSyncBusy(null);
+    showToast(ok ? '☁️ Google Drive-এ সিঙ্ক হয়েছে ✅' : 'সিঙ্ক হয়নি — আবার চেষ্টা করুন');
+  }, [onSyncNow, showToast]);
+
+  const handlePullNow = useCallback(async () => {
+    setSyncBusy('pull');
+    const ok = await onPullNow(true);
+    setSyncBusy(null);
+    setPullConfirm(false);
+    showToast(ok ? '☁️ ক্লাউডের ডেটা এনে লাগানো হয়েছে ✅' : 'ক্লাউডে কোনো ডেটা পাওয়া যায়নি');
+  }, [onPullNow, showToast]);
 
   return (
     <div className="px-4 pt-5 space-y-4 page-enter">
@@ -228,66 +195,76 @@ export function SettingsPage({
         </p>
       </div>
 
-      {/* Google Drive */}
+      {/* Google সাইন-ইন + অটো-সিঙ্ক */}
       <div className="card">
         <p className="card-title text-sm">
-          <i className="fas fa-cloud text-blue-400" />Google Drive ব্যাকআপ (Optional)
+          <i className="fas fa-cloud text-blue-400" />Google সাইন-ইন (অটো-সিঙ্ক)
         </p>
-        <div className="space-y-3">
-          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300">
-            <i className="fas fa-info-circle mr-1" />Google verification সমস্যা থাকলেও লোকাল ব্যাকআপ ব্যবহার করুন।
-          </div>
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">Google OAuth Client ID</label>
-            <input
-              className="input-field text-xs"
-              placeholder="xxxxx.apps.googleusercontent.com"
-              value={googleClientIdInput}
-              onChange={e => setGoogleClientIdInput(e.target.value)}
-            />
-          </div>
-          <button
-            onClick={() => {
-              onSetGoogleClientId(googleClientIdInput.trim() || null);
-              showToast(googleClientIdInput.trim() ? 'Client ID সেভ হয়েছে' : 'Client ID মুছা হয়েছে');
-            }}
-            className="btn btn-secondary text-sm"
-          >
-            <i className="fas fa-save" />Client ID সংরক্ষণ
-          </button>
 
-          {state.googleAccessToken && (
+        {!GOOGLE_SYNC_ENABLED ? (
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+            <i className="fas fa-screwdriver-wrench mr-1" />
+            এই বিল্ডে Google সাইন-ইন এখনো কনফিগার হয়নি — অ্যাপ-মালিকের একবার
+            <code> src/config.ts</code>-এ Client ID বসাতে হবে
+            (নির্দেশিকা: <code>GOOGLE_SETUP.md</code>)। ততক্ষণ লোকাল ব্যাকআপ ব্যবহার করুন।
+          </div>
+        ) : !signedIn ? (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400 leading-relaxed">
+              আপনার Google অ্যাকাউন্ট দিয়ে লগিন করুন — যেকোনো পরিবর্তনের
+              <span className="text-emerald-300"> কয়েক সেকেন্ড পরেই ডেটা স্বয়ংক্রিয়ভাবে আপনার
+              Google Drive-এ সেভ</span> হবে। নতুন ফোনে লগিন করলেই সব ডেটা ফিরে আসবে।
+            </p>
             <button
-              onClick={() => { signOut(); onSetGoogleAccessToken(null); showToast('Google থেকে সাইন আউট হয়েছে'); }}
-              className="btn btn-danger text-sm"
+              onClick={handleSignIn}
+              disabled={syncBusy !== null}
+              className="btn text-sm w-full justify-center"
+              style={{
+                background: '#ffffff', color: '#1f2937',
+                border: '1px solid rgba(255,255,255,0.25)', fontWeight: 600,
+              }}
             >
-              <i className="fas fa-right-from-bracket" />Google Sign Out
+              {syncBusy === 'signin'
+                ? <><i className="fas fa-spinner spin" />Google-এ যাচ্ছে…</>
+                : <><svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>
+                Google দিয়ে সাইন ইন করুন</>}
             </button>
-          )}
-
-          {driveInfo && (
-            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs">
-              <p className="text-emerald-400 font-semibold">
-                {driveInfo.exists ? '✅ Drive-এ ব্যাকআপ আছে' : '❌ Drive-এ কোনো ব্যাকআপ নেই'}
-              </p>
-              {driveInfo.modifiedTime && (
-                <p className="text-gray-400 mt-1">সর্বশেষ: {new Date(driveInfo.modifiedTime).toLocaleString('bn-BD')}</p>
-              )}
+            <p className="text-[10px] text-gray-500 text-center">
+              🔒 আপনার ডেটা শুধু <span className="text-gray-400">আপনার নিজের</span> Google Drive-এ থাকে — অ্যাপ-মালিক বা অন্য কেউ দেখতে পায় না।
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <div className="w-9 h-9 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                <i className="fas fa-check text-emerald-400" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-emerald-300 truncate">{state.googleEmail || 'Google অ্যাকাউন্ট'}</p>
+                <p className="text-[10px] text-gray-400">
+                  অটো-সিঙ্ক চালু{state.lastSyncTime ? ` · শেষ সিঙ্ক: ${new Date(state.lastSyncTime).toLocaleString('bn-BD')}` : ''}
+                </p>
+              </div>
             </div>
-          )}
 
-          <div className="grid grid-cols-3 gap-2">
-            <button onClick={handleCheckDrive} disabled={driveLoading || !state.googleClientId} className="btn btn-secondary text-xs">
-              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-up'}`} />চেক
-            </button>
-            <button onClick={handleGoogleBackup} disabled={driveLoading || !state.googleClientId} className="btn btn-primary text-xs">
-              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-up'}`} />ব্যাকআপ
-            </button>
-            <button onClick={handleGoogleRestore} disabled={driveLoading || !state.googleClientId} className="btn btn-secondary text-xs">
-              <i className={`fas ${driveLoading ? 'fa-spinner spin' : 'fa-cloud-arrow-down'}`} />রিস্টোর
+            <p className="text-[11px] text-gray-500">
+              <i className="fas fa-bolt mr-1 text-emerald-400" />
+              যেকোনো পরিবর্তনের কয়েক সেকেন্ড পরেই ডেটা স্বয়ংক্রিয়ভাবে আপনার Drive-এ সেভ হয়।
+            </p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={handleSyncNow} disabled={syncBusy !== null} className="btn btn-primary text-xs">
+                <i className={`fas ${syncBusy === 'sync' ? 'fa-spinner spin' : 'fa-cloud-arrow-up'}`} />এখনই সিঙ্ক
+              </button>
+              <button onClick={() => setPullConfirm(true)} disabled={syncBusy !== null} className="btn btn-secondary text-xs">
+                <i className={`fas ${syncBusy === 'pull' ? 'fa-spinner spin' : 'fa-cloud-arrow-down'}`} />ক্লাউড থেকে আনুন
+              </button>
+            </div>
+            <button onClick={handleSignOut} disabled={syncBusy !== null} className="btn text-xs" style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+              <i className="fas fa-right-from-bracket" />সাইন আউট
             </button>
           </div>
-        </div>
+        )}
       </div>
 
       {/* PIN Lock */}
@@ -338,6 +315,22 @@ export function SettingsPage({
           </div>
         </button>
       </div>
+
+      {/* Cloud pull confirm */}
+      <Modal open={pullConfirm} onClose={() => setPullConfirm(false)} title="ক্লাউড থেকে আনুন">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-300 leading-relaxed">
+            আপনার Google Drive-এ সেভ সর্বশেষ ডেটা দিয়ে এই ফোনের
+            <span className="text-amber-300"> বর্তমান সব ডেটা বদলে যাবে</span>। এগিয়ে যাবেন?
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button className="btn btn-secondary text-sm" onClick={() => setPullConfirm(false)}>বাতিল</button>
+            <button className="btn btn-primary text-sm" onClick={handlePullNow} disabled={syncBusy !== null}>
+              {syncBusy === 'pull' && <i className="fas fa-spinner spin" />}হ্যাঁ, আনুন
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* PIN Modal */}
       <Modal open={pinModal} onClose={() => setPinModal(false)} title="পিন সেট করুন">
