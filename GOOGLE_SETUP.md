@@ -42,6 +42,7 @@
 2. Application type: **Web application**
 3. Name: `amar-zakat-web`
 4. **Authorized JavaScript origins** — অ্যাপ যেখান-যেখান থেকে চলবে সবগুলো যোগ করুন:
+   - ⭐ **Firebase-এ migrate করলে (সর্বশেষ):** `https://<FIREBASE_PROJECT_ID>.web.app` এবং `https://<FIREBASE_PROJECT_ID>.firebaseapp.com` যোগ করতেই হবে — নইলে নতুন ঠিকানায় "Google দিয়ে সাইন ইন" কাজ করবে না। বিস্তারিত: README_FIREBASE_MIGRATION.md অংশ ২।
    - `http://localhost:5173` (ডেভেলপমেন্ট)
    - `https://ferdausfs.github.io` (GitHub Pages হোস্টিং)
    - নিজের ডোমেইন থাকলে সেটাও

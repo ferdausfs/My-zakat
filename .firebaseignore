@@ -1,0 +1,10 @@
+# Firebase Hosting-এ upload করার দরকার নেই এমন ফাইল
+node_modules
+src
+.git
+.github
+*.md
+package-lock.json
+.firebase
+*.bundle
+*.tar.gz
