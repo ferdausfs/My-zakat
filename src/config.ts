@@ -10,7 +10,7 @@
  * Placeholder রাখা থাকলে সাইন-ইন বোতাম ডিসেবল থাকবে এবং সেটিংসে একটি
  * "সেটআপ হয়নি" নোট দেখাবে — বাকি অ্যাপ সম্পূর্ণ অফলাইনে কাজ করবে।
  */
-export const GOOGLE_CLIENT_ID = '898898558784-rq7t01mi5a7d7ro7uhbug8orpnb9qvvp.apps.googleusercontent.com';
+export const GOOGLE_CLIENT_ID = '620713324308-69g2ggr22508s97tqm5h11d0u282u5kg.apps.googleusercontent.com';
 
 /** Whether the owner has configured a real client ID yet. */
 export const GOOGLE_SYNC_ENABLED = !GOOGLE_CLIENT_ID.startsWith('REPLACE_WITH');
