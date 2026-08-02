@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { Modal } from '../components/Modal';
 import type { AppState } from '../utils/storage';
-import { signInWithGoogle, revokeGoogleToken } from '../utils/googleDrive';
-import { GOOGLE_SYNC_ENABLED } from '../config';
+import { signInWithGoogle, revokeGoogleToken, classifyGisError, GIS_ERROR_TEXT } from '../utils/googleDrive';
+import { GOOGLE_SYNC_ENABLED, GOOGLE_CLIENT_ID } from '../config';
 
 /** আসল কারণ বাংলায় — App-এর classifySyncError কোড অনুযায়ী। */
 const SYNC_ERROR_TEXT: Record<string, string> = {
@@ -99,9 +99,16 @@ export function SettingsPage({
       onGoogleSignedIn({ token: res.token, expiresAt: res.expiresAt, email: res.user?.email || null });
       // সফল টোস্ট App দেখায় (pull ফলাফল অনুযায়ী)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('popup')) showToast('পপআপ ব্লক হয়েছে — পপআপ অনুমতি দিয়ে আবার চেষ্টা করুন');
-      else showToast('সাইন ইন হয়নি — ইন্টারনেট দেখে আবার চেষ্টা করুন');
+      const code = classifyGisError(err);
+      showToast(GIS_ERROR_TEXT[code]);
+      // client-not-found / origin-mismatch are console misconfigs — surface a
+      // short diagnostic so the owner can fix the real cause in one shot.
+      if (code === 'client_not_found' || code === 'origin_mismatch' || code === 'app_not_configured') {
+        showToast(
+          GIS_ERROR_TEXT[code] + ' (সাইট: ' + window.location.origin +
+          ' · Client ID শেষাংশ: …' + GOOGLE_CLIENT_ID.slice(-12) + ')'
+        );
+      }
     } finally {
       setSyncBusy(null);
     }

@@ -18,6 +18,48 @@ const EXPIRY_BUFFER_MS = 60_000;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type GisWindow = any;
 
+/**
+ * Map a Google Identity Services error to a stable, user-facing code.
+ * GSI rejects with Error messages like "popup_failed_to_open",
+ * "popup_closed_by_user", "access_denied", "oauth_client_not_found",
+ * "origin_mismatch" — these are the console/config failure modes that a
+ * wrong/undocumented client id produces, and the UI needs to tell them apart.
+ */
+export type GisErrorCode =
+  | 'popup_blocked'
+  | 'popup_closed'
+  | 'access_denied'
+  | 'client_not_found'
+  | 'origin_mismatch'
+  | 'app_not_configured'
+  | 'in_progress'
+  | 'unknown';
+
+export function classifyGisError(err: unknown): GisErrorCode {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  const m = msg.toLowerCase();
+  if (m.includes('popup_failed') || m.includes('popup blocked') || m.includes('cannot open popup')) return 'popup_blocked';
+  if (m.includes('popup_closed') || m.includes('user_closed')) return 'popup_closed';
+  if (m.includes('access_denied')) return 'access_denied';
+  if (m.includes('client_not_found') || m.includes('invalid_client')) return 'client_not_found';
+  if (m.includes('origin')) return 'origin_mismatch';
+  if (m.includes('app_not_configured') || m.includes('unauthorized_client')) return 'app_not_configured';
+  if (m.includes('in_progress')) return 'in_progress';
+  return 'unknown';
+}
+
+/** Short human hint for each code (বাংলা, Settings-এ দেখানো হয়)। */
+export const GIS_ERROR_TEXT: Record<GisErrorCode, string> = {
+  popup_blocked: 'পপআপ ব্লক হয়েছে — ব্রাউজারের পপআপ অনুমতি দিন, তারপর আবার চেষ্টা করুন।',
+  popup_closed: 'আপনি লগইন উইন্ডো বন্ধ করেছেন। আবার চেষ্টা করলে হবে।',
+  access_denied: 'আপনি Google অনুমতি দেননি। সাইন ইন করতে হলে অনুমতি দিতে হবে।',
+  client_not_found: 'Client ID-টি Google-এ খুঁজে পাওয়া যায়নি। GOOGLE_SETUP.md ধাপ ৪-৫ দেখুন (নতুন Client ID বানিয়ে বসান)।',
+  origin_mismatch: 'Origin অনুমোদিত নয় — Google Console-এর Authorized JavaScript origins-এ এই সাইটের origin যোগ করা নেই। GOOGLE_SETUP.md ধাপ ৪ দেখুন।',
+  app_not_configured: 'Google অ্যাপ কনফিগার করা নেই — Drive API enable + consent screen (test users সহ) দরকার। GOOGLE_SETUP.md ধাপ ২-৩ দেখুন।',
+  in_progress: 'আগের লগইন এখনো চলছে — একটু পর আবার চেষ্টা করুন।',
+  unknown: 'অজানা সমস্যা — ইন্টারনেট/Google সার্ভিস চেক করুন, অথবা আবার চেষ্টা করুন।',
+};
+
 export interface TokenResult {
   token: string;
   /** epoch ms when the token expires (buffer already applied) */
