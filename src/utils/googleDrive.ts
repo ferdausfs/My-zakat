@@ -1,9 +1,14 @@
 /**
- * Google অটো-সিঙ্ক ইঞ্জিন
- * ──────────────────────
- * ব্যবহারকারী শুধু "Google দিয়ে সাইন ইন" চাপে — Client ID অ্যাপের ভেতরে
- * বিল্ট-ইন (src/config.ts)। ডেটা ব্যবহারকারীর নিজের Google Drive-এ একটি
- * JSON ফাইলে সেভ হয়; টোকেনের মেয়াদ শেষ হলে নীরবে রিফ্রেশ হয়।
+ * Google অটো-সিঙ্ক ইঞ্জিন — সম্পূর্ণ নতুন বিল্ড (v2)
+ * ─────────────────────────────────────────────
+ * Clean rewrite of the Google Identity Services (GSI) flow:
+ *   - একটাই token-client সিঙ্গেলটন + স্পষ্ট state machine
+ *   - একসাথে একাধিক token request গার্ড করা (in_progress)
+ *   - Silent refresh → consent fallback, পরিষ্কারভাবে
+ *   - প্রতিটি fail-এ classifyGisError() দিয়ে নির্ভরযোগ্য বাংলা কারণ
+ *
+ * Client ID: src/config.ts থেকে আসে (একটাই source of truth)।
+ * ডেটা ব্যবহারকারীর নিজের Google Drive-এ একটি JSON ফাইলে সেভ হয়।
  */
 import { GOOGLE_CLIENT_ID } from '../config';
 
@@ -12,19 +17,28 @@ const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const BACKUP_FILE_NAME = 'amar_zakat_app_backup.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
-/** Treat tokens as expired this much before their real expiry (clock skew buffer). */
+/** টোকেনের মেয়াদ শেষ বলে ধরার ৬০ সেকেন্ড আগে (clock skew buffer)। */
 const EXPIRY_BUFFER_MS = 60_000;
+/** স্ক্রিপ্ট লোড fail হলে একবার retry। */
+const SCRIPT_LOAD_MAX_ATTEMPTS = 2;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type GisWindow = any;
 
-/**
- * Map a Google Identity Services error to a stable, user-facing code.
- * GSI rejects with Error messages like "popup_failed_to_open",
- * "popup_closed_by_user", "access_denied", "oauth_client_not_found",
- * "origin_mismatch" — these are the console/config failure modes that a
- * wrong/undocumented client id produces, and the UI needs to tell them apart.
- */
+// ── Public types ─────────────────────────────────────────────────────────
+export interface TokenResult {
+  token: string;
+  /** epoch ms যতক্ষণ টোকেন বৈধ (buffer প্রয়োগ করা হয়েছে) */
+  expiresAt: number;
+}
+
+export interface GoogleUser {
+  email: string;
+  name: string;
+  photo?: string;
+}
+
+/** Google-এর আসল fail-mode → স্থিতিশীল কোড (Settings-এ বাংলায় দেখানো হয়)। */
 export type GisErrorCode =
   | 'popup_blocked'
   | 'popup_closed'
@@ -48,38 +62,17 @@ export function classifyGisError(err: unknown): GisErrorCode {
   return 'unknown';
 }
 
-/** Short human hint for each code (বাংলা, Settings-এ দেখানো হয়)। */
 export const GIS_ERROR_TEXT: Record<GisErrorCode, string> = {
   popup_blocked: 'পপআপ ব্লক হয়েছে — ব্রাউজারের পপআপ অনুমতি দিন, তারপর আবার চেষ্টা করুন।',
   popup_closed: 'আপনি লগইন উইন্ডো বন্ধ করেছেন। আবার চেষ্টা করলে হবে।',
   access_denied: 'আপনি Google অনুমতি দেননি। সাইন ইন করতে হলে অনুমতি দিতে হবে।',
-  client_not_found: 'Client ID-টি Google-এ খুঁজে পাওয়া যায়নি। GOOGLE_SETUP.md ধাপ ৪-৫ দেখুন (নতুন Client ID বানিয়ে বসান)।',
-  origin_mismatch: 'Origin অনুমোদিত নয় — Google Console-এর Authorized JavaScript origins-এ এই সাইটের origin যোগ করা নেই। GOOGLE_SETUP.md ধাপ ৪ দেখুন।',
-  app_not_configured: 'Google অ্যাপ কনফিগার করা নেই — Drive API enable + consent screen (test users সহ) দরকার। GOOGLE_SETUP.md ধাপ ২-৩ দেখুন।',
+  client_not_found: 'Client ID-টি Google-এ খুঁজে পাওয়া যায়নি (invalid_client)। GOOGLE_SETUP.md ধাপ ৪-৫ দেখুন।',
+  origin_mismatch: 'Origin অনুমোদিত নয় — Google Console-এর Authorized JavaScript origins-এ এই সাইটের origin যোগ করা নেই।',
+  app_not_configured: 'Google অ্যাপ কনফিগার করা নেই — Drive API enable + consent screen (test users সহ) দরকার।',
   in_progress: 'আগের লগইন এখনো চলছে — একটু পর আবার চেষ্টা করুন।',
   unknown: 'অজানা সমস্যা — ইন্টারনেট/Google সার্ভিস চেক করুন, অথবা আবার চেষ্টা করুন।',
 };
 
-export interface TokenResult {
-  token: string;
-  /** epoch ms when the token expires (buffer already applied) */
-  expiresAt: number;
-}
-
-export interface GoogleUser {
-  email: string;
-  name: string;
-  photo?: string;
-}
-
-let gisLoaded = false;
-let tokenClient: { requestAccessToken: (opts?: { prompt?: string }) => void } | null = null;
-let pendingToken: {
-  resolve: (r: TokenResult) => void;
-  reject: (e: Error) => void;
-} | null = null;
-
-/** Rich Drive API error — carries HTTP status + Google's machine-readable reason. */
 export class DriveError extends Error {
   status: number;
   reason: string;
@@ -90,11 +83,169 @@ export class DriveError extends Error {
   }
 }
 
+// ── Singleton GSI state ───────────────────────────────────────────────────
+let gisLoaded = false;
+let gisLoading: Promise<void> | null = null;
+let tokenClient: { requestAccessToken: (opts?: { prompt?: string }) => void } | null = null;
+let pendingToken: { resolve: (r: TokenResult) => void; reject: (e: Error) => void } | null = null;
+
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('GIS_SCRIPT_LOAD_FAILED'));
+    document.head.appendChild(script);
+  });
+}
+
 /**
- * fetch() wrapper for Drive calls. Network failure → DriveError(status 0).
- * Non-OK responses → DriveError with status + parsed reason so the UI can
- * tell "token expired" apart from "Drive API disabled" / "missing scope".
+ * Google Identity Services স্ক্রিপ্ট load করে (একবারই, retry সহ)।
+ * Fail করলে throw — caller catch করে UI-তে বাংলা message দেখায়।
  */
+export async function loadGoogleIdentity(): Promise<void> {
+  if (gisLoaded) return;
+  if (gisLoading) return gisLoading;
+  gisLoading = (async () => {
+    let lastErr: unknown = null;
+    for (let i = 0; i < SCRIPT_LOAD_MAX_ATTEMPTS; i++) {
+      try {
+        await loadScript(GIS_SCRIPT_URL);
+        // google.accounts চেক — কখনো কখনো script load হলেও object তৈরি হতে দেরি হয়
+        const g = (window as unknown as GisWindow).google;
+        if (!g?.accounts?.oauth2) {
+          // একটু অপেক্ষা করে আবার চেক
+          await new Promise(r => setTimeout(r, 400));
+        }
+        gisLoaded = true;
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('GIS_SCRIPT_LOAD_FAILED');
+  })();
+  return gisLoading;
+}
+
+/** Active client id this build actually uses (runtime diagnostics). */
+export function activeClientId(): string {
+  return GOOGLE_CLIENT_ID;
+}
+
+/** "hidden bug" guard: log the exact client id + origin at sign-in so a
+ *  console/config mismatch is never invisible again. Returns true if sane. */
+export function logSignInContext(): boolean {
+  const id = GOOGLE_CLIENT_ID;
+  const ok = id.length === 72 && id.endsWith('.apps.googleusercontent.com') && !/\s/.test(id);
+  console.warn('[MyZakat Google] client_id=' + id);
+  console.warn('[MyZakat Google] origin=' + window.location.origin);
+  console.warn('[MyZakat Google] sanity=' + (ok ? 'OK' : 'MISMATCH-REVIEW'));
+  return ok;
+}
+
+/**
+ * Token client সিঙ্গেলটন। প্রথম call-এ init + callback বসে।
+ */
+async function getTokenClient() {
+  await loadGoogleIdentity();
+  if (tokenClient) return tokenClient;
+  const g = (window as unknown as GisWindow).google;
+  const client = g.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp: Record<string, unknown>) => {
+      const pending = pendingToken;
+      pendingToken = null;
+      if (!pending) return;
+      if (resp['error'] || !resp['access_token']) {
+        const desc = String(resp['error_description'] || resp['error'] || 'no_token');
+        pending.reject(new Error(desc));
+        return;
+      }
+      const expiresInSec = Number(resp['expires_in'] ?? 3599);
+      pending.resolve({
+        token: String(resp['access_token']),
+        expiresAt: Date.now() + expiresInSec * 1000 - EXPIRY_BUFFER_MS,
+      });
+    },
+    error_callback: (err: Record<string, unknown>) => {
+      const pending = pendingToken;
+      pendingToken = null;
+      if (!pending) return;
+      // GSI error_callback-এর আসল কোডগুলো: popup_failed_to_open,
+      // popup_closed_by_user, access_denied, oauth_client_not_found,
+      // origin_mismatch, app_not_configured ...
+      const type = String(err['type'] || err['message'] || 'unknown');
+      pending.reject(new Error(type));
+    },
+  });
+  tokenClient = client;
+  return client;
+}
+
+/**
+ * টোকেন চাও — `prompt: ''` = silent (ইতিমধ্যে consent দেওয়া থাকলে),
+ * `prompt: 'consent'` = Google account chooser/consent screen।
+ * একসাথে একাধিক request গার্ড করা।
+ */
+async function requestToken(prompt: '' | 'consent'): Promise<TokenResult> {
+  if (pendingToken) throw new Error('in_progress');
+  const client = await getTokenClient();
+  const result = new Promise<TokenResult>((resolve, reject) => {
+    pendingToken = { resolve, reject };
+  });
+  client.requestAccessToken({ prompt });
+  return result;
+}
+
+/**
+ * ইন্টারঅ্যাকটিভ সাইন-ইন: আগে silent চেষ্টা, না হলে consent popup।
+ * Return: token + expiresAt + (যদি পাই) user info।
+ */
+export async function signInWithGoogle(): Promise<TokenResult & { user: GoogleUser | null }> {
+  logSignInContext();
+  let tr: TokenResult;
+  try {
+    tr = await requestToken('');
+  } catch (err) {
+    const code = classifyGisError(err);
+    // silent fail — এটা শুধু "consent দরকার" হলে, popup আবার খুলি
+    if (code === 'popup_blocked' || code === 'popup_closed' || code === 'access_denied' || code === 'unknown') {
+      tr = await requestToken('consent');
+    } else {
+      throw err;
+    }
+  }
+  const user = await fetchGoogleUser(tr.token).catch(() => null);
+  return { ...tr, user };
+}
+
+/**
+ * Silent refresh — saved token নাই/মেয়াদ শেষ হলে। ব্যবহারকারীর আবার
+ * ইন্টারঅ্যাকশন লাগলে reject করে (App catch করে auth code দেখায়)।
+ */
+export async function silentRefreshToken(): Promise<TokenResult> {
+  return requestToken('');
+}
+
+/** Saved token এখনও আরামে বৈধ কিনা। */
+export function isTokenValid(savedToken: string | null, expiresAt: number | null): boolean {
+  return !!savedToken && !!expiresAt && Date.now() < expiresAt;
+}
+
+export function revokeGoogleToken(token: string | null): void {
+  if (!token) return;
+  try {
+    const g = (window as unknown as GisWindow).google;
+    g?.accounts?.oauth2?.revoke?.(token, () => {});
+  } catch { /* ignore */ }
+}
+
+// ── Drive API calls ───────────────────────────────────────────────────────
 async function driveFetch(context: string, url: string, init: RequestInit): Promise<Response> {
   let res: Response;
   try {
@@ -108,104 +259,6 @@ async function driveFetch(context: string, url: string, init: RequestInit): Prom
     throw new DriveError(context, res.status, reason);
   }
   return res;
-}
-
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
-    const script = document.createElement('script');
-    script.src = src; script.async = true; script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Google Identity Services লোড হয়নি (ইন্টারনেট আছে?)'));
-    document.head.appendChild(script);
-  });
-}
-
-export async function loadGoogleIdentity(): Promise<void> {
-  if (gisLoaded) return;
-  await loadScript(GIS_SCRIPT_URL);
-  gisLoaded = true;
-}
-
-async function getTokenClient() {
-  await loadGoogleIdentity();
-  if (tokenClient) return tokenClient;
-  const g = (window as unknown as GisWindow).google;
-  const client = g.accounts.oauth2.initTokenClient({
-    client_id: GOOGLE_CLIENT_ID,
-    scope: SCOPES,
-    callback: (resp: Record<string, unknown>) => {
-      const pending = pendingToken;
-      pendingToken = null;
-      if (!pending) return;
-      if (resp['error'] || !resp['access_token']) {
-        pending.reject(new Error(String(resp['error'] || 'no_token')));
-        return;
-      }
-      const expiresInSec = Number(resp['expires_in'] ?? 3599);
-      pending.resolve({
-        token: String(resp['access_token']),
-        expiresAt: Date.now() + expiresInSec * 1000 - EXPIRY_BUFFER_MS,
-      });
-    },
-    error_callback: (err: Record<string, unknown>) => {
-      const pending = pendingToken;
-      pendingToken = null;
-      pending?.reject(new Error(String(err['type'] || err['message'] || 'popup_failed')));
-    },
-  });
-  tokenClient = client;
-  return client;
-}
-
-/**
- * Request a token. `prompt: ''` stays silent when the user already consented;
- * `prompt: 'consent'` shows the Google account chooser/consent screen.
- */
-async function requestToken(prompt: '' | 'consent'): Promise<TokenResult> {
-  if (pendingToken) throw new Error('token_request_in_progress');
-  const client = await getTokenClient();
-  const result = new Promise<TokenResult>((resolve, reject) => {
-    pendingToken = { resolve, reject };
-  });
-  client.requestAccessToken({ prompt });
-  return result;
-}
-
-/**
- * Interactive sign-in. Tries silently first (returning user), falls back to
- * the consent popup for first-time users.
- */
-export async function signInWithGoogle(): Promise<TokenResult & { user: GoogleUser | null }> {
-  let tr: TokenResult;
-  try {
-    tr = await requestToken('');
-  } catch {
-    tr = await requestToken('consent');
-  }
-  const user = await fetchGoogleUser(tr.token).catch(() => null);
-  return { ...tr, user };
-}
-
-/**
- * Silent refresh — call when the saved token is missing/near expiry.
- * Rejects if Google needs the user to interact again.
- */
-export async function silentRefreshToken(): Promise<TokenResult> {
-  return requestToken('');
-}
-
-/** True while the saved token is still comfortably valid. */
-export function isTokenValid(savedToken: string | null, expiresAt: number | null): boolean {
-  return !!savedToken && !!expiresAt && Date.now() < expiresAt;
-}
-
-export function revokeGoogleToken(token: string | null): void {
-  if (!token) return;
-  try {
-    const g = (window as unknown as GisWindow).google;
-    g?.accounts?.oauth2?.revoke?.(token, () => {});
-  } catch { /* ignore */ }
 }
 
 export async function fetchGoogleUser(token: string): Promise<GoogleUser | null> {

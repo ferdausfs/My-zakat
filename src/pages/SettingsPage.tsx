@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { Modal } from '../components/Modal';
 import type { AppState } from '../utils/storage';
-import { signInWithGoogle, revokeGoogleToken, classifyGisError, GIS_ERROR_TEXT } from '../utils/googleDrive';
-import { GOOGLE_SYNC_ENABLED, GOOGLE_CLIENT_ID } from '../config';
+import { signInWithGoogle, revokeGoogleToken, classifyGisError, GIS_ERROR_TEXT, activeClientId, logSignInContext } from '../utils/googleDrive';
+import { GOOGLE_SYNC_ENABLED } from '../config';
 
 /** আসল কারণ বাংলায় — App-এর classifySyncError কোড অনুযায়ী। */
 const SYNC_ERROR_TEXT: Record<string, string> = {
@@ -100,14 +100,19 @@ export function SettingsPage({
       // সফল টোস্ট App দেখায় (pull ফলাফল অনুযায়ী)
     } catch (err: unknown) {
       const code = classifyGisError(err);
-      showToast(GIS_ERROR_TEXT[code]);
+      logSignInContext();
       // client-not-found / origin-mismatch are console misconfigs — surface a
-      // short diagnostic so the owner can fix the real cause in one shot.
+      // full diagnostic (origin + LIVE client id) so the owner can compare it
+      // against the Google Console client in one glance.
       if (code === 'client_not_found' || code === 'origin_mismatch' || code === 'app_not_configured') {
+        const live = activeClientId();
         showToast(
-          GIS_ERROR_TEXT[code] + ' (সাইট: ' + window.location.origin +
-          ' · Client ID শেষাংশ: …' + GOOGLE_CLIENT_ID.slice(-12) + ')'
+          GIS_ERROR_TEXT[code] + '\n\n🔍 Diagnostic:\nSite: ' + window.location.origin +
+          '\nClient ID (this build): ' + live +
+          '\nConsole-এ ওইটা আছে কিনা মিলিয়ে দেখুন।'
         );
+      } else {
+        showToast(GIS_ERROR_TEXT[code]);
       }
     } finally {
       setSyncBusy(null);

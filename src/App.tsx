@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { HomePage } from './pages/HomePage';
 import { ZakatPage } from './pages/ZakatPage';
 import { SalatPage } from './pages/SalatPage';
 import { TasbihPage } from './pages/TasbihPage';
@@ -18,9 +19,10 @@ import {
 import { GOOGLE_SYNC_ENABLED } from './config';
 import { isRamadan, ramadanDaysInfo } from './utils/hijri';
 
-type Page = 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
+type Page = 'home' | 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
 
 const NAV: readonly { key: Page; label: string; icon: string }[] = [
+  { key: 'home',     label: 'হোম',    icon: 'fa-house' },
   { key: 'zakat',    label: 'যাকাত',  icon: 'fa-shield-halved' },
   { key: 'salat',    label: 'সালাত',  icon: 'fa-mosque' },
   { key: 'tasbih',   label: 'তাসবীহ', icon: 'fa-hands-praying' },
@@ -45,7 +47,7 @@ function useDebouncedSave(state: AppState) {
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
-  const [page, setPage] = useState<Page>('zakat');
+  const [page, setPage] = useState<Page>('home');
   const [toast, setToast] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -289,6 +291,18 @@ export default function App() {
       )}
 
       {/* Page Content */}
+      {page === 'home' && (
+        <HomePage
+          location={state.location}
+          salatLog={state.salatLog}
+          assets={state.assets}
+          liabilities={state.liabilities}
+          prices={state.prices}
+          nisabStandard={state.nisabStandard}
+          onNavigate={(pg) => setPage(pg as Page)}
+        />
+      )}
+
       {page === 'zakat' && (
         <ZakatPage
           assets={state.assets}
