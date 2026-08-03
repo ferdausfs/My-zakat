@@ -2,22 +2,28 @@
 @import "tailwindcss";
 
 :root {
-  /* Prayer-Times-style: pure black + green accent */
-  --primary: #4ADE80;
-  --primary-dark: #22C55E;
-  --primary-glow: rgba(74, 222, 128, 0.22);
-  --green-dim: rgba(74, 222, 128, 0.12);
+  /* FTT Signal-Pro style: dark navy + teal/cyan, Material glass */
+  --primary: #4DD0E1;
+  --primary-dark: #26A69A;
+  --primary-glow: rgba(77, 208, 225, 0.22);
+  --green-dim: rgba(77, 208, 225, 0.12);
+  --blue: #6AB0F3;
+  --blue-dim: rgba(106, 176, 243, 0.14);
+  --purple: #B39DDB;
+  --purple-dim: rgba(179, 157, 219, 0.16);
   --gold: #E3B23C;
   --gold-dim: rgba(227, 178, 60, 0.12);
-  --bg: #0A0A0A;
-  --card-bg: #151515;
-  --card-2: #1B1B1B;
+  --success: #81C784;
+  --error: #FFB4AB;
+  --bg: #09090B;
+  --card-bg: rgba(30, 30, 35, 0.72);
+  --card-2: #27272D;
   --card-border: rgba(255, 255, 255, 0.06);
   --hairline: rgba(255, 255, 255, 0.06);
   --line-2: rgba(255, 255, 255, 0.09);
-  --text: #FFFFFF;
-  --text-dim: #8E8E93;
-  --text-muted: #5A5A5E;
+  --text: #E3E2E6;
+  --text-dim: #C4C6D0;
+  --text-muted: #6E6E73;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -31,7 +37,11 @@ html, body, #root {
 
 body {
   font-family: 'Hind Siliguri', 'Inter', system-ui, sans-serif;
-  background: var(--bg);
+  background:
+    radial-gradient(700px 420px at 85% -10%, rgba(77, 208, 225, 0.09), transparent 60%),
+    radial-gradient(600px 380px at 0% 110%, rgba(106, 176, 243, 0.07), transparent 55%),
+    var(--bg);
+  background-color: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   min-height: 100dvh;
@@ -62,13 +72,13 @@ body::before {
 /* ─── Cards ─── */
 .card {
   background: var(--card-bg);
-  border-radius: 1rem;
+  border-radius: 20px;
   padding: 16px;
   margin-bottom: 12px;
   border: 1px solid var(--card-border);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -569,3 +579,48 @@ input:focus-visible, button:focus-visible { outline: 2px solid var(--primary); o
 /* bottom nav — Prayer Times style */
 .bottom-nav{background:rgba(10,10,10,.95)}
 .nav-item.active i{background:var(--green-dim);border-radius:12px;padding:5px 9px;box-shadow:0 0 0 4px var(--green-dim)}
+
+/* ═══ FTT Signal-Pro theme overrides ═══ */
+
+/* 3-col quick grid (6 features on home) */
+.pt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 18px 0}
+.pt-two-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:18px;padding:14px 8px;text-align:center;cursor:pointer;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:transform .15s}
+.pt-two-card:active{transform:scale(.95)}
+.pt-two-card .qi{font-size:1.3rem;margin-bottom:5px}
+.pt-two-card .qn{font-size:.74rem;font-weight:600}
+.pt-two-card .qs{font-size:.56rem;color:var(--text-muted);margin-top:1px}
+
+/* nav glass + teal active */
+.bottom-nav{background:rgba(9,9,11,0.85);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);border:1px solid rgba(255,255,255,0.06)}
+.nav-item.active{color:var(--primary)}
+.nav-item.active i{background:var(--green-dim);border-radius:12px;padding:5px 9px;box-shadow:0 0 0 4px var(--green-dim);color:var(--primary)}
+.nav-item.active::after{background:linear-gradient(90deg,var(--primary),var(--primary-dark));box-shadow:0 0 8px var(--primary-glow)}
+
+/* hero + rows teal accents */
+.pt-hero .now-lbl{color:var(--primary)}
+.pt-hero .now-count b{color:var(--primary)}
+.pl-row.now{background:var(--green-dim);border:1px solid rgba(77,208,225,.35)}
+.pl-row.now .nm,.pl-row.now .tm{color:var(--primary)}
+.pl-row.next{background:var(--card-bg);border:1px solid var(--line-2)}
+
+/* pill colors → teal */
+.pill-em{background:var(--green-dim);color:var(--primary)}
+.pill-green{background:var(--green-dim);color:var(--success)}
+
+/* switch teal */
+.switch.on{background:var(--primary)}
+
+/* top bar glass */
+.pt-topbar{padding:12px 20px 4px}
+.pt-topbtn{background:var(--card-bg);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--card-border);color:var(--text-dim);border-radius:12px}
+
+/* qibla arrow teal */
+.compass .arrow{background:linear-gradient(180deg,var(--primary),var(--primary-dark));box-shadow:0 0 18px rgba(77,208,225,.5)}
+.compass .kaaba{border-color:rgba(227,178,60,.5);color:var(--gold)}
+
+/* event dots keep */
+.cal-days .d.today{background:var(--primary);color:#00363a}
+
+/* input glass */
+.input-field{background:rgba(30,30,35,0.6);border:1px solid var(--card-border)}
+.input-field:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-glow)}

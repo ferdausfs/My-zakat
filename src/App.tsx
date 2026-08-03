@@ -24,10 +24,10 @@ import { isRamadan, ramadanDaysInfo } from './utils/hijri';
 type Page = 'home' | 'qibla' | 'hijri' | 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
 
 const NAV: readonly { key: Page; label: string; icon: string }[] = [
-  { key: 'home',     label: 'নামাজ',  icon: 'fa-mosque' },
-  { key: 'qibla',    label: 'কিবলা',  icon: 'fa-compass' },
-  { key: 'hijri',    label: 'হিজরি',  icon: 'fa-calendar-days' },
+  { key: 'home',     label: 'হোম',    icon: 'fa-house' },
+  { key: 'salat',    label: 'সালাত',  icon: 'fa-mosque' },
   { key: 'zakat',    label: 'যাকাত',  icon: 'fa-shield-halved' },
+  { key: 'tasbih',   label: 'তাসবীহ', icon: 'fa-hands-praying' },
   { key: 'settings', label: 'সেটিং',  icon: 'fa-gear' },
 ] as const;
 

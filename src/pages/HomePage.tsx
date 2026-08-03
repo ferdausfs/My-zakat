@@ -133,13 +133,25 @@ export function HomePage({ location, assets, liabilities, prices, nisabStandard,
         <div className="arr">›</div>
       </div>
 
-      {/* Quick: tasbih + dua */}
-      <div className="pt-two">
+      {/* Quick grid — ALL features reachable (সালাত/যাকাত/তাসবীহ/দোয়া/কিবলা/হিজরি) */}
+      <div className="pt-grid">
+        <div className="pt-two-card" onClick={() => onNavigate('salat')}>
+          <div className="qi">◐</div><div className="qn">সালাত</div><div className="qs">টাইমস + লগ</div>
+        </div>
+        <div className="pt-two-card" onClick={() => onNavigate('zakat')}>
+          <div className="qi">◇</div><div className="qn">যাকাত</div><div className="qs">হিসাব + হাওল</div>
+        </div>
         <div className="pt-two-card" onClick={() => onNavigate('tasbih')}>
           <div className="qi">✦</div><div className="qn">তাসবীহ</div><div className="qs">জিকর কাউন্টার</div>
         </div>
         <div className="pt-two-card" onClick={() => onNavigate('dua')}>
           <div className="qi">☾</div><div className="qn">দোয়া</div><div className="qs">সংকলন</div>
+        </div>
+        <div className="pt-two-card" onClick={() => onNavigate('qibla')}>
+          <div className="qi">⌖</div><div className="qn">কিবলা</div><div className="qs">কম্পাস</div>
+        </div>
+        <div className="pt-two-card" onClick={() => onNavigate('hijri')}>
+          <div className="qi">☀</div><div className="qn">হিজরি</div><div className="qs">ক্যালেন্ডার</div>
         </div>
       </div>
     </div>
