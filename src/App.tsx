@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HomePage } from './pages/HomePage';
+import { QiblaPage } from './pages/QiblaPage';
+import { HijriPage } from './pages/HijriPage';
 import { ZakatPage } from './pages/ZakatPage';
 import { SalatPage } from './pages/SalatPage';
 import { TasbihPage } from './pages/TasbihPage';
@@ -19,15 +21,14 @@ import {
 import { GOOGLE_SYNC_ENABLED } from './config';
 import { isRamadan, ramadanDaysInfo } from './utils/hijri';
 
-type Page = 'home' | 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
+type Page = 'home' | 'qibla' | 'hijri' | 'zakat' | 'salat' | 'tasbih' | 'dua' | 'settings';
 
 const NAV: readonly { key: Page; label: string; icon: string }[] = [
-  { key: 'home',     label: 'হোম',    icon: 'fa-house' },
+  { key: 'home',     label: 'নামাজ',  icon: 'fa-mosque' },
+  { key: 'qibla',    label: 'কিবলা',  icon: 'fa-compass' },
+  { key: 'hijri',    label: 'হিজরি',  icon: 'fa-calendar-days' },
   { key: 'zakat',    label: 'যাকাত',  icon: 'fa-shield-halved' },
-  { key: 'salat',    label: 'সালাত',  icon: 'fa-mosque' },
-  { key: 'tasbih',   label: 'তাসবীহ', icon: 'fa-hands-praying' },
-  { key: 'dua',      label: 'দোয়া',   icon: 'fa-book-quran' },
-  { key: 'settings', label: 'সেটিংস', icon: 'fa-gear' },
+  { key: 'settings', label: 'সেটিং',  icon: 'fa-gear' },
 ] as const;
 
 function genId(): string {
@@ -294,13 +295,20 @@ export default function App() {
       {page === 'home' && (
         <HomePage
           location={state.location}
-          salatLog={state.salatLog}
           assets={state.assets}
           liabilities={state.liabilities}
           prices={state.prices}
           nisabStandard={state.nisabStandard}
           onNavigate={(pg) => setPage(pg as Page)}
         />
+      )}
+
+      {page === 'qibla' && (
+        <QiblaPage location={state.location} />
+      )}
+
+      {page === 'hijri' && (
+        <HijriPage />
       )}
 
       {page === 'zakat' && (
