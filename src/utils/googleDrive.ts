@@ -131,6 +131,22 @@ export async function loadGoogleIdentity(): Promise<void> {
   return gisLoading;
 }
 
+/** Active client id this build actually uses (runtime diagnostics). */
+export function activeClientId(): string {
+  return GOOGLE_CLIENT_ID;
+}
+
+/** "hidden bug" guard: log the exact client id + origin at sign-in so a
+ *  console/config mismatch is never invisible again. Returns true if sane. */
+export function logSignInContext(): boolean {
+  const id = GOOGLE_CLIENT_ID;
+  const ok = id.length === 72 && id.endsWith('.apps.googleusercontent.com') && !/\s/.test(id);
+  console.warn('[MyZakat Google] client_id=' + id);
+  console.warn('[MyZakat Google] origin=' + window.location.origin);
+  console.warn('[MyZakat Google] sanity=' + (ok ? 'OK' : 'MISMATCH-REVIEW'));
+  return ok;
+}
+
 /**
  * Token client সিঙ্গেলটন। প্রথম call-এ init + callback বসে।
  */
@@ -191,6 +207,7 @@ async function requestToken(prompt: '' | 'consent'): Promise<TokenResult> {
  * Return: token + expiresAt + (যদি পাই) user info।
  */
 export async function signInWithGoogle(): Promise<TokenResult & { user: GoogleUser | null }> {
+  logSignInContext();
   let tr: TokenResult;
   try {
     tr = await requestToken('');
